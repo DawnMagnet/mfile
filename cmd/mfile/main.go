@@ -42,46 +42,56 @@ func run(args []string, argv0 string, stdout, stderr io.Writer) int {
 	}
 	if opts.Version {
 		if _, err := fmt.Fprint(stdout, ver.Format(version)); err != nil {
-			fmt.Fprintln(stderr, "mfile:", err)
+			reportErr(stderr, err)
 			return 1
 		}
 		return 0
 	}
 	if len(opts.Paths) == 0 {
 		if err := cli.Usage(stderr, argv0); err != nil {
-			fmt.Fprintln(stderr, "mfile:", err)
+			reportErr(stderr, err)
 		}
 		return 2
 	}
 	stopCPU, err := startCPUProfile(opts.CPUProfile)
 	if err != nil {
-		fmt.Fprintln(stderr, "mfile:", err)
+		reportErr(stderr, err)
 		return 1
 	}
 	failed, runErr := cli.Run(opts, stdout, stderr)
 	if stopCPU != nil {
 		if err := stopCPU(); err != nil {
-			fmt.Fprintln(stderr, "mfile:", err)
+			reportErr(stderr, err)
 		}
 	}
 	if opts.MemProfile != "" {
 		if err := writeMemProfile(opts.MemProfile); err != nil {
-			fmt.Fprintln(stderr, "mfile:", err)
+			reportErr(stderr, err)
 		}
 	}
 	if opts.Stats {
 		if err := cli.PrintProcessStats(stderr); err != nil {
-			fmt.Fprintln(stderr, "mfile:", err)
+			reportErr(stderr, err)
 		}
 	}
 	if runErr != nil {
-		fmt.Fprintln(stderr, "mfile:", runErr)
+		reportErr(stderr, runErr)
 		return 1
 	}
 	if failed {
 		return 1
 	}
 	return 0
+}
+
+// reportErr writes a diagnostic. A failed write is ignored: stderr is
+// already the stream that could not be used, and the caller still returns
+// its own status.
+func reportErr(stderr io.Writer, err error) {
+	if err == nil {
+		return
+	}
+	_, _ = fmt.Fprintln(stderr, "mfile:", err)
 }
 
 func startCPUProfile(path string) (func() error, error) {
