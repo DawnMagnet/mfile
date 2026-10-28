@@ -111,7 +111,10 @@ jobs:
         run: |
           set -euo pipefail
           out=$(./bin/mfile cmd/mfile/main.go LICENSE)
-          printf '%s\n' "${out}"
+          # Prefix each line. setup-go's problem matcher treats
+          # "^<path>.go: <message>" as a compiler error, and mfile's
+          # text output for a .go file matches that pattern.
+          printf '%s\n' "${out}" | sed 's/^/smoke: /'
           if [ -z "${out}" ]; then
             echo "smoke test produced empty output"
             exit 1
@@ -171,7 +174,9 @@ jobs:
         run: |
           set -euo pipefail
           out=$(./bin/mfile cmd/mfile/main.go LICENSE)
-          printf '%s\n' "${out}"
+          # Same prefix as the static-build smoke step: avoid the Go
+          # problem matcher annotating cmd/mfile/main.go as an error.
+          printf '%s\n' "${out}" | sed 's/^/smoke: /'
           if [ -z "${out}" ]; then
             echo "simd smoke test produced empty output"
             exit 1
