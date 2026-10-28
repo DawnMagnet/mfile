@@ -18,9 +18,15 @@ import (
 // (cannot open or stat), or when opts.ExitOnFSError is set and a path
 // has a filesystem error. Filesystem errors are ordinary stdout lines,
 // matching file(1), unless ExitOnFSError is set: then the same line goes
-// to stderr. Other paths are still written. Phase timings go to stderr
-// when opts.Stats is set and at least one regular file was scanned.
+// to stderr. Pretty does not print that line; it renders Result.Error.
+// Other paths are still written. The renderer receives the raw Result
+// and escapes its own text. Phase timings go to stderr when opts.Stats
+// is set and at least one regular file was scanned.
 func Run(opts Options, stdout, stderr io.Writer) (failed bool, err error) {
+	format, err := outputFormat(opts)
+	if err != nil {
+		return false, err
+	}
 	results, stats, err := detect.Scan(opts.Paths, detect.Options{
 		Follow:  opts.Follow,
 		Workers: opts.Workers,
@@ -36,9 +42,12 @@ func Run(opts Options, stdout, stderr io.Writer) (failed bool, err error) {
 		}
 	}
 	var rnd render.Renderer
-	if opts.JSON {
+	switch format {
+	case "json":
 		rnd = render.NewJSON(stdout)
-	} else {
+	case "pretty":
+		rnd = render.NewPretty(stdout, render.Options{})
+	default:
 		rnd = render.NewPlain(stdout)
 	}
 	if err := rnd.Begin(); err != nil {
@@ -46,21 +55,24 @@ func Run(opts Options, stdout, stderr io.Writer) (failed bool, err error) {
 	}
 	for _, res := range results {
 		if isFSError(res) {
-			line := formatOpenError(res.Path, res.Error)
-			if opts.ExitOnFSError {
-				if _, err := io.WriteString(stderr, line); err != nil {
-					return false, err
+			// Pretty renders Result.Error. The file-style line stays the
+			// plain-text form, and with -E it also goes to stderr for json.
+			if format != "pretty" {
+				line := formatOpenError(res.Path, res.Error)
+				if opts.ExitOnFSError {
+					if _, err := io.WriteString(stderr, line); err != nil {
+						return false, err
+					}
+					failed = true
+				} else if format == "plain" {
+					if _, err := io.WriteString(stdout, line); err != nil {
+						return false, err
+					}
 				}
+			} else if opts.ExitOnFSError {
 				failed = true
-			} else if !opts.JSON {
-				if _, err := io.WriteString(stdout, line); err != nil {
-					return false, err
-				}
 			}
-			// JSON keeps the historical object, including its error field.
-			// The file-style line is the plain-text form, so it is not
-			// mixed into the JSON stream.
-			if opts.JSON {
+			if format == "json" || format == "pretty" {
 				if err := rnd.Write(res); err != nil {
 					return false, err
 				}
@@ -70,15 +82,7 @@ func Run(opts Options, stdout, stderr io.Writer) (failed bool, err error) {
 		if res.Error != "" {
 			failed = true
 		}
-		written := res
-		if !opts.JSON {
-			// Plain text only. JSON encoding already escapes, and escaping
-			// first would turn \033 into a literal backslash sequence.
-			written.Path = termesc.Escape(res.Path)
-			written.Target = termesc.Escape(res.Target)
-			written.Error = termesc.Escape(res.Error)
-		}
-		if err := rnd.Write(written); err != nil {
+		if err := rnd.Write(res); err != nil {
 			return false, err
 		}
 	}
@@ -86,6 +90,22 @@ func Run(opts Options, stdout, stderr io.Writer) (failed bool, err error) {
 		return false, err
 	}
 	return failed, nil
+}
+
+// outputFormat selects the renderer. An explicit --format wins.
+// With no --format, -json selects json and the default is plain.
+func outputFormat(opts Options) (string, error) {
+	switch opts.Format {
+	case "":
+		if opts.JSON {
+			return "json", nil
+		}
+		return "plain", nil
+	case "plain", "json", "pretty":
+		return opts.Format, nil
+	default:
+		return "", fmt.Errorf("unknown --format %q", opts.Format)
+	}
 }
 
 // isFSError reports a stat or open failure recorded by detect.

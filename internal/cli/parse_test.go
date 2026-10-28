@@ -99,6 +99,38 @@ func TestParseExitOnFSError(t *testing.T) {
 	}
 }
 
+func TestParseFormat(t *testing.T) {
+	opts, err := Parse([]string{"--format", "pretty", "a"}, ioDiscard(t), "mfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.Format != "pretty" || opts.JSON || len(opts.Paths) != 1 || opts.Paths[0] != "a" {
+		t.Fatalf("%+v", opts)
+	}
+	opts, err = Parse([]string{"-format=json", "b"}, ioDiscard(t), "mfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.Format != "json" || len(opts.Paths) != 1 || opts.Paths[0] != "b" {
+		t.Fatalf("single-dash format: %+v", opts)
+	}
+	opts, err = Parse([]string{"-json", "c"}, ioDiscard(t), "mfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.JSON || opts.Format != "" || opts.Paths[0] != "c" {
+		t.Fatalf("legacy json: %+v", opts)
+	}
+
+	var buf bytes.Buffer
+	if _, err := Parse([]string{"-h"}, &buf, "mfile"); err == nil || !errors.Is(err, pflag.ErrHelp) {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "--format") || !strings.Contains(buf.String(), "pretty") {
+		t.Fatalf("help missing format:\n%s", buf.String())
+	}
+}
+
 func TestParseHelpAndUnknown(t *testing.T) {
 	var buf bytes.Buffer
 	_, err := Parse([]string{"-h"}, &buf, "mfile")
