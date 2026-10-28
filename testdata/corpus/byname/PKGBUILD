@@ -1,0 +1,12 @@
+pkgname=qa-sample
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="synthetic QA sample"
+arch=('x86_64')
+license=('MIT')
+source=()
+sha256sums=()
+
+package() {
+  install -Dm644 README "$pkgdir/usr/share/doc/qa-sample/README"
+}
