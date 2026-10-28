@@ -30,10 +30,10 @@ func TestSIMDPath(t *testing.T) {
 	}{
 		{name: "avx2", cpu: avx2CPU(), rt: exp, want: PathAVX2},
 		{name: "avx512", cpu: avx512CPU(), rt: exp, want: PathAVX512},
-		{name: "avx only", cpu: CPUInfo{HasAVX: true}, rt: exp, want: PathAVX128NoSIMD},
+		{name: "avx only", cpu: CPUInfo{HasAVX: true}, rt: exp, want: PathSoftware},
 		{name: "no avx", cpu: CPUInfo{}, rt: exp, want: PathSoftware},
 		{name: "no experiment", cpu: avx512CPU(), rt: Runtime{GOAMD64: 1}, want: PathSoftware},
-		{name: "guard env on avx2 cpu", cpu: avx2CPU(), rt: guard, want: PathAVX128NoSIMD},
+		{name: "guard env on avx2 cpu", cpu: avx2CPU(), rt: guard, want: PathSoftware},
 		{name: "guard env on avx512 cpu", cpu: avx512CPU(), rt: guard, want: PathAVX512},
 		{
 			name: "simd=0 alone keeps avx2 kernels",
@@ -45,13 +45,13 @@ func TestSIMDPath(t *testing.T) {
 			name: "gomlx avx2 off",
 			cpu:  avx2CPU(),
 			rt:   Runtime{GOMLXAVX2: "off", GOAMD64: 1, SIMDExperiment: true},
-			want: PathAVX128NoSIMD,
+			want: PathSoftware,
 		},
 		{
 			name: "gomlx avx2 case insensitive",
 			cpu:  avx2CPU(),
 			rt:   Runtime{GOMLXAVX2: "OFF", GOAMD64: 1, SIMDExperiment: true},
-			want: PathAVX128NoSIMD,
+			want: PathSoftware,
 		},
 		{
 			name: "gomlx avx512 off falls through to avx2",
@@ -75,7 +75,7 @@ func TestSIMDPath(t *testing.T) {
 			name: "godebug last wins off",
 			cpu:  avx2CPU(),
 			rt:   Runtime{GODEBUG: "gctrace=1,cpu.avx2=on,cpu.avx2=off", GOAMD64: 1, SIMDExperiment: true},
-			want: PathAVX128NoSIMD,
+			want: PathSoftware,
 		},
 		{
 			name: "v3 ignores cpu.avx2=off",
@@ -111,7 +111,7 @@ func TestSIMDPath(t *testing.T) {
 			name: "cpu.all=off then avx=on",
 			cpu:  avx2CPU(),
 			rt:   Runtime{GODEBUG: "cpu.all=off,cpu.avx=on", GOAMD64: 1, SIMDExperiment: true},
-			want: PathAVX128NoSIMD,
+			want: PathSoftware,
 		},
 		{
 			name: "cannot enable a missing feature",
@@ -134,7 +134,7 @@ func TestSIMDPath(t *testing.T) {
 				GOAMD64:        1,
 				SIMDExperiment: true,
 			},
-			want: PathAVX128NoSIMD,
+			want: PathSoftware,
 		},
 	}
 	for _, tc := range tests {

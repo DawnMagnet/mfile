@@ -26,13 +26,28 @@ func Resolve(ldflagsVersion string) string {
 // Format is the --version text: version, Go version, GOAMD64 level,
 // the SIMD path actually taken, and whether the CPU guard re-exec'd.
 func Format(ldflagsVersion string) string {
-	return fmt.Sprintf("mfile %s\n%s\nGOAMD64=%s\nsimd=%s\ncpu_guard=%t\n",
+	return fmt.Sprintf("mfile %s\n%s\nGOAMD64=%s\nsimd=%s\ncpu_guard=%s\n",
 		Resolve(ldflagsVersion),
 		runtime.Version(),
 		goamd64Label(),
 		SIMDPath(hostCPU(), currentRuntime()),
-		os.Getenv(cpuguard.MarkerVar) == cpuguard.MarkerValue,
+		cpuGuardLabel(os.Getenv(cpuguard.MarkerVar)),
 	)
+}
+
+// cpuGuardLabel maps MFILE_CPU_GUARD to the cpu_guard field.
+// Only the exact re-exec marker is "true". Any other non-empty value was
+// set manually and is "manual", never a real re-exec. Unset and empty are
+// "false".
+func cpuGuardLabel(marker string) string {
+	switch marker {
+	case "":
+		return "false"
+	case cpuguard.MarkerValue:
+		return "true"
+	default:
+		return "manual"
+	}
 }
 
 func currentRuntime() Runtime {

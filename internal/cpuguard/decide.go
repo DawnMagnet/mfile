@@ -17,8 +17,9 @@ import "strings"
 const (
 	// MarkerVar is set on the re-exec'd process so it does not re-exec again.
 	MarkerVar = "MFILE_CPU_GUARD"
-	// MarkerValue is the value of MarkerVar that means a re-exec already happened.
-	MarkerValue = "1"
+	// MarkerValue is the only value that means the guard itself re-exec'd.
+	// Any other non-empty value means the user set the variable manually.
+	MarkerValue = "reexec"
 
 	gomlxAVX2Var = "GOMLX_GO_SIMD_AVX2"
 	godebugKey   = "GODEBUG"
@@ -37,11 +38,17 @@ type Features struct {
 
 // Decide reports whether this process should re-exec, and the environment
 // to give the replacement. newEnv is nil when reexec is false.
+//
+// A non-empty marker skips the re-exec. The replacement is given
+// MarkerValue ("reexec"), and a child that already has that value must
+// not re-exec again. Any other non-empty value is a manual skip: the
+// user set the variable, and this process must not re-exec either.
+// Unset and empty are the same, and take the normal CPU decision.
 func Decide(f Features, env []string) (reexec bool, newEnv []string) {
 	if !needsGuard(f) {
 		return false, nil
 	}
-	if got, ok := lookup(env, MarkerVar); ok && got == MarkerValue {
+	if got, ok := lookup(env, MarkerVar); ok && got != "" {
 		return false, nil
 	}
 	godebug, _ := lookup(env, godebugKey)

@@ -5,6 +5,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"runtime/pprof"
@@ -25,55 +26,72 @@ func main() {
 	// kernels. The qemu real-inference gate (Sandy Bridge, and Haswell
 	// without FMA) is what checks that assumption.
 	cpuguard.Apply()
+	os.Exit(run(os.Args[1:], os.Args[0], os.Stdout, os.Stderr))
+}
+
+// run is the command after the CPU guard. Usage and argument errors return 2.
+// A filesystem error returns 1 only when -E is set; otherwise it returns 0.
+func run(args []string, argv0 string, stdout, stderr io.Writer) int {
 	cli.CapGOMAXPROCS()
-	opts, err := cli.Parse(os.Args[1:], os.Stderr, os.Args[0])
+	opts, err := cli.Parse(args, stderr, argv0)
 	if err != nil {
 		if errors.Is(err, pflag.ErrHelp) {
-			os.Exit(0)
+			return 0
 		}
-		os.Exit(2)
+		return 2
 	}
 	if opts.Version {
-		if _, err := fmt.Fprint(os.Stdout, ver.Format(version)); err != nil {
-			fmt.Fprintln(os.Stderr, "mfile:", err)
-			os.Exit(1)
+		if _, err := fmt.Fprint(stdout, ver.Format(version)); err != nil {
+			reportErr(stderr, err)
+			return 1
 		}
-		return
+		return 0
 	}
 	if len(opts.Paths) == 0 {
-		if err := cli.Usage(os.Stderr, os.Args[0]); err != nil {
-			fmt.Fprintln(os.Stderr, "mfile:", err)
+		if err := cli.Usage(stderr, argv0); err != nil {
+			reportErr(stderr, err)
 		}
-		os.Exit(2)
+		return 2
 	}
 	stopCPU, err := startCPUProfile(opts.CPUProfile)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "mfile:", err)
-		os.Exit(1)
+		reportErr(stderr, err)
+		return 1
 	}
-	failed, runErr := cli.Run(opts, os.Stdout)
+	failed, runErr := cli.Run(opts, stdout, stderr)
 	if stopCPU != nil {
 		if err := stopCPU(); err != nil {
-			fmt.Fprintln(os.Stderr, "mfile:", err)
+			reportErr(stderr, err)
 		}
 	}
 	if opts.MemProfile != "" {
 		if err := writeMemProfile(opts.MemProfile); err != nil {
-			fmt.Fprintln(os.Stderr, "mfile:", err)
+			reportErr(stderr, err)
 		}
 	}
 	if opts.Stats {
-		if err := cli.PrintProcessStats(os.Stderr); err != nil {
-			fmt.Fprintln(os.Stderr, "mfile:", err)
+		if err := cli.PrintProcessStats(stderr); err != nil {
+			reportErr(stderr, err)
 		}
 	}
 	if runErr != nil {
-		fmt.Fprintln(os.Stderr, "mfile:", runErr)
-		os.Exit(1)
+		reportErr(stderr, runErr)
+		return 1
 	}
 	if failed {
-		os.Exit(1)
+		return 1
 	}
+	return 0
+}
+
+// reportErr writes a diagnostic. A failed write is ignored: stderr is
+// already the stream that could not be used, and the caller still returns
+// its own status.
+func reportErr(stderr io.Writer, err error) {
+	if err == nil {
+		return
+	}
+	_, _ = fmt.Fprintln(stderr, "mfile:", err)
 }
 
 func startCPUProfile(path string) (func() error, error) {

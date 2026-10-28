@@ -3,17 +3,24 @@ package cli
 import (
 	"fmt"
 	"io"
-	"os"
 	"runtime"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/DawnMagnet/mfile/internal/detect"
 	"github.com/DawnMagnet/mfile/internal/render"
+	"github.com/DawnMagnet/mfile/internal/termesc"
 )
 
 // Run scans opts.Paths and writes one result at a time to stdout.
-// failed is true when any path has an error. Phase timings go to stderr
+// failed is true when a path has an error other than a filesystem error
+// (cannot open or stat), or when opts.ExitOnFSError is set and a path
+// has a filesystem error. Filesystem errors are ordinary stdout lines,
+// matching file(1), unless ExitOnFSError is set: then the same line goes
+// to stderr. Other paths are still written. Phase timings go to stderr
 // when opts.Stats is set and at least one regular file was scanned.
-func Run(opts Options, stdout io.Writer) (failed bool, err error) {
+func Run(opts Options, stdout, stderr io.Writer) (failed bool, err error) {
 	results, stats, err := detect.Scan(opts.Paths, detect.Options{
 		Follow:  opts.Follow,
 		Workers: opts.Workers,
@@ -23,7 +30,7 @@ func Run(opts Options, stdout io.Writer) (failed bool, err error) {
 		return false, err
 	}
 	if opts.Stats && stats.Active {
-		if _, err := fmt.Fprintf(os.Stderr, "stat+open %v, NewScanner %v, ScanAll %v (%d files)\n",
+		if _, err := fmt.Fprintf(stderr, "stat+open %v, NewScanner %v, ScanAll %v (%d files)\n",
 			stats.StatOpen, stats.Scanner, stats.ScanAll, stats.Files); err != nil {
 			return false, err
 		}
@@ -38,10 +45,40 @@ func Run(opts Options, stdout io.Writer) (failed bool, err error) {
 		return false, err
 	}
 	for _, res := range results {
+		if isFSError(res) {
+			line := formatOpenError(res.Path, res.Error)
+			if opts.ExitOnFSError {
+				if _, err := io.WriteString(stderr, line); err != nil {
+					return false, err
+				}
+				failed = true
+			} else if !opts.JSON {
+				if _, err := io.WriteString(stdout, line); err != nil {
+					return false, err
+				}
+			}
+			// JSON keeps the historical object, including its error field.
+			// The file-style line is the plain-text form, so it is not
+			// mixed into the JSON stream.
+			if opts.JSON {
+				if err := rnd.Write(res); err != nil {
+					return false, err
+				}
+			}
+			continue
+		}
 		if res.Error != "" {
 			failed = true
 		}
-		if err := rnd.Write(res); err != nil {
+		written := res
+		if !opts.JSON {
+			// Plain text only. JSON encoding already escapes, and escaping
+			// first would turn \033 into a literal backslash sequence.
+			written.Path = termesc.Escape(res.Path)
+			written.Target = termesc.Escape(res.Target)
+			written.Error = termesc.Escape(res.Error)
+		}
+		if err := rnd.Write(written); err != nil {
 			return false, err
 		}
 	}
@@ -49,6 +86,48 @@ func Run(opts Options, stdout io.Writer) (failed bool, err error) {
 		return false, err
 	}
 	return failed, nil
+}
+
+// isFSError reports a stat or open failure recorded by detect.
+// The Go error text is "op path: errno". Content-scan errors are not
+// filesystem errors and still fail the process.
+func isFSError(r detect.Result) bool {
+	if r.Error == "" || r.Classified {
+		return false
+	}
+	_, ok := fsErrno(r.Path, r.Error)
+	return ok
+}
+
+// formatOpenError is file(1)'s line for a path it could not stat:
+// name: cannot open `name' (strerror). Both path copies and the
+// parenthetical text are escaped. The trailing newline is the record
+// separator and stays a raw newline.
+func formatOpenError(path, goErr string) string {
+	detail, ok := fsErrno(path, goErr)
+	if !ok {
+		detail = goErr
+	}
+	shown := termesc.Escape(path)
+	return fmt.Sprintf("%s: cannot open `%s' (%s)\n", shown, shown, termesc.Escape(capitalizeErrno(detail)))
+}
+
+func fsErrno(path, goErr string) (string, bool) {
+	for _, op := range []string{"lstat ", "stat ", "open "} {
+		prefix := op + path + ": "
+		if strings.HasPrefix(goErr, prefix) {
+			return goErr[len(prefix):], true
+		}
+	}
+	return "", false
+}
+
+func capitalizeErrno(s string) string {
+	r, size := utf8.DecodeRuneInString(s)
+	if r == utf8.RuneError && size <= 1 {
+		return s
+	}
+	return string(unicode.ToUpper(r)) + s[size:]
 }
 
 // PrintProcessStats writes heap counters and, when available, peak RSS.

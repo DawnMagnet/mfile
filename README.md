@@ -24,12 +24,27 @@ CGO_ENABLED=0 GOEXPERIMENT=simd go build -trimpath -ldflags='-s -w' -o bin/mfile
 ## Usage
 
 ```bash
-mfile [-json] [-L] [-workers N] [-batch N] [-stats] FILE...
+mfile [-json] [-L] [-E] [-workers N] [-batch N] [-stats] FILE...
 ```
 
 `-stats` prints phase timings, Go heap counters and the process peak RSS
 (PeakWorkingSetSize on Windows, VmHWM on Linux) to stderr. `-cpuprofile` and
 `-memprofile` write pprof profiles.
+
+A path that cannot be opened or stat'd is printed on stdout in the same
+form as `file` and the process exits 0, after the other paths are still
+scanned:
+
+```text
+path: cannot open `path' (No such file or directory)
+```
+
+`-E` prints that line on stderr and exits 1. Usage and argument errors
+exit 2.
+
+`MFILE_CPU_GUARD` is an internal variable. Setting it manually is for
+debugging only and will crash with SIGILL on affected CPUs (AVX without
+AVX2, or AVX2 without FMA).
 
 ## Model patch
 

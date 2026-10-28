@@ -67,6 +67,38 @@ func TestParseVersion(t *testing.T) {
 	}
 }
 
+func TestParseExitOnFSError(t *testing.T) {
+	opts, err := Parse([]string{"-E", "missing"}, ioDiscard(t), "mfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.ExitOnFSError || len(opts.Paths) != 1 || opts.Paths[0] != "missing" {
+		t.Fatalf("%+v", opts)
+	}
+	opts, err = Parse([]string{"--exit-on-fs-error", "-L", "a"}, ioDiscard(t), "mfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.ExitOnFSError || !opts.Follow {
+		t.Fatalf("%+v", opts)
+	}
+	opts, err = Parse([]string{"-exit-on-fs-error", "a"}, ioDiscard(t), "mfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.ExitOnFSError || len(opts.Paths) != 1 {
+		t.Fatalf("single-dash long flag: %+v", opts)
+	}
+
+	var buf bytes.Buffer
+	if _, err := Parse([]string{"-h"}, &buf, "mfile"); err == nil || !errors.Is(err, pflag.ErrHelp) {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "-E") || !strings.Contains(buf.String(), "filesystem errors") || !strings.Contains(buf.String(), "POSIX") {
+		t.Fatalf("help missing -E:\n%s", buf.String())
+	}
+}
+
 func TestParseHelpAndUnknown(t *testing.T) {
 	var buf bytes.Buffer
 	_, err := Parse([]string{"-h"}, &buf, "mfile")
@@ -79,8 +111,11 @@ func TestParseHelpAndUnknown(t *testing.T) {
 	if !strings.Contains(buf.String(), "--dereference") || !strings.Contains(buf.String(), "-L") {
 		t.Fatalf("help flags:\n%s", buf.String())
 	}
-	if !strings.Contains(buf.String(), "MFILE_CPU_GUARD") || !strings.Contains(buf.String(), "Set it to 1") {
+	if !strings.Contains(buf.String(), "MFILE_CPU_GUARD") || !strings.Contains(buf.String(), "debugging only") || !strings.Contains(buf.String(), "SIGILL") {
 		t.Fatalf("help missing guard note:\n%s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "AVX without AVX2") || !strings.Contains(buf.String(), "AVX2 without FMA") {
+		t.Fatalf("help missing affected CPUs:\n%s", buf.String())
 	}
 
 	buf.Reset()
