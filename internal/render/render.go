@@ -1,6 +1,6 @@
 // Package render writes detection results.
 //
-// Plain, JSON, and pretty renderers stream: each Write call emits one result.
+// Plain and JSON renderers stream: each Write call emits one result.
 // Buffering renderers (table, tree) can collect results until End and
 // should live in their own files.
 package render

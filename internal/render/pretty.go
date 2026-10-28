@@ -13,7 +13,7 @@ import (
 //
 // Columns are padded to a display width chosen in Begin so rows line up
 // while results still stream out of Write. A pipe keeps the full layout.
-// A terminal narrows it to GetSize (or Options.Columns): the path budget
+// A terminal narrows it to the terminal width (or Options.Columns): the path budget
 // shrinks first, then the label, MIME, source, and size columns drop, in
 // that order. Path, description, group, score, the low-confidence marker,
 // and error text stay. Paths wider than the column are middle-truncated on

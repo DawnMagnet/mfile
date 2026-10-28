@@ -8,7 +8,6 @@ import (
 	"unicode"
 
 	"github.com/DawnMagnet/mfile/internal/detect"
-	"golang.org/x/term"
 )
 
 // ColorMode selects when pretty output uses ANSI color.
@@ -45,7 +44,7 @@ type Options struct {
 	IsTTY *bool
 	// Columns, when positive, is the terminal width in cells. It applies
 	// only when the output is a TTY; a pipe or buffer keeps the full layout.
-	// Zero asks a real terminal via golang.org/x/term GetSize.
+	// Zero asks the terminal for its width.
 	Columns int
 }
 
@@ -325,28 +324,6 @@ func isTTY(w io.Writer, opt Options) bool {
 		return *opt.IsTTY
 	}
 	return isTerminal(w)
-}
-
-func isTerminal(w io.Writer) bool {
-	f, ok := w.(*os.File)
-	if !ok {
-		return false
-	}
-	return term.IsTerminal(int(f.Fd()))
-}
-
-// terminalColumns reports the width of a terminal writer. A non-file or a
-// failed GetSize yields 0, and the caller keeps the full layout.
-func terminalColumns(w io.Writer) int {
-	f, ok := w.(*os.File)
-	if !ok {
-		return 0
-	}
-	cols, _, err := term.GetSize(int(f.Fd()))
-	if err != nil || cols <= 0 {
-		return 0
-	}
-	return cols
 }
 
 // lowSources are layers that are low confidence at any score. Values outside
