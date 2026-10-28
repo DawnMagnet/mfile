@@ -49,7 +49,7 @@ func TestFormatReportsPathAndGuard(t *testing.T) {
 			if out != want {
 				t.Fatalf("format:\n%s\nwant:\n%s", out, want)
 			}
-			if path != PathAVX512 && path != PathAVX2 && path != PathAVX128NoSIMD && path != PathSoftware {
+			if path != PathAVX512 && path != PathAVX2 && path != PathSoftware {
 				t.Fatalf("unexpected path %q", path)
 			}
 			if !strings.Contains(out, "cpu_guard="+tc.want+"\n") {

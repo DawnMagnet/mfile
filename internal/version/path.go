@@ -7,11 +7,11 @@ const (
 	PathAVX512 = "avx512"
 	// PathAVX2 is the gomlx AVX2 kernel.
 	PathAVX2 = "avx2"
-	// PathAVX128NoSIMD is AVX without the AVX2/AVX-512 kernels
-	// (the portable nosimd implementation, including the CPU-guard path).
-	PathAVX128NoSIMD = "avx128+nosimd"
-	// PathSoftware is scalar code: no AVX, or a binary built without
+	// PathSoftware is scalar code. That includes a CPU with no AVX, AVX
+	// without the AVX2/AVX-512 kernels (the CPU-guard fallback produces
+	// the same bytes as this path), and a binary built without
 	// GOEXPERIMENT=simd (those kernels are not compiled in).
+	// cpu_guard is what distinguishes a guard fallback from a CPU with no AVX.
 	PathSoftware = "software"
 )
 
@@ -53,9 +53,6 @@ func SIMDPath(cpu CPUInfo, rt Runtime) string {
 		}
 		if eff.HasAVX2 && envBool(rt.GOMLXAVX2, true) {
 			return PathAVX2
-		}
-		if eff.HasAVX {
-			return PathAVX128NoSIMD
 		}
 	}
 	return PathSoftware
