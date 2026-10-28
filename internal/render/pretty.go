@@ -52,6 +52,11 @@ func (p *Pretty) Begin() error {
 		return errors.New("render: nil writer")
 	}
 	color, icons := resolveAppearance(p.w, p.opt)
+	// On a Windows console this turns on ANSI. Failure means the console
+	// cannot show color; icons stay as already chosen.
+	if !enableVirtualTerminal(p.w) {
+		color = false
+	}
 	p.color = color
 	p.icons = icons
 	p.lay = resolveLayout(p.w, p.opt, icons != iconsNone)
@@ -108,8 +113,9 @@ func (p *Pretty) format(r detect.Result) string {
 	b.WriteString(colSep)
 
 	if failed {
-		// Result.Error is already the message. Do not prefix, parse, or clip it.
-		b.WriteString(paint(p.color, sgrErr, r.Error))
+		// Result.Error is the message. Do not prefix or rewrite it, but
+		// strip controls so a path inside the text cannot inject escapes.
+		b.WriteString(paint(p.color, sgrErr, sanitize(r.Error)))
 		b.WriteByte('\n')
 		return b.String()
 	}
@@ -166,5 +172,10 @@ func unclassified(r detect.Result) string {
 		return "unclassified"
 	}
 }
+
+// enableVirtualTerminal is the platform hook for Windows console ANSI.
+// It returns false only when enabling virtual-terminal processing fails.
+// Tests replace it to cover that fallback.
+var enableVirtualTerminal = platformEnableVirtualTerminal
 
 var _ Renderer = (*Pretty)(nil)

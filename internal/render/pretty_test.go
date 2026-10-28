@@ -3,6 +3,7 @@ package render
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"regexp"
 	"strconv"
@@ -340,6 +341,50 @@ func TestPrettyWidth(t *testing.T) {
 	// A wide description is truncated on a rune boundary and still fills the column.
 	if !strings.Contains(lines[3], "...") {
 		t.Errorf("wide description was not truncated: %q", lines[3])
+	}
+}
+
+func TestPrettyErrorSanitize(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	const inj = "\x1b]0;x\x07"
+	row := detect.Result{
+		Index: 0,
+		Path:  "bad" + inj + ".txt",
+		Error: "lstat bad" + inj + ".txt: no such file",
+	}
+	off := renderAll(t, Options{Color: ColorNever, Icons: IconNone}, []detect.Result{row})
+	if strings.IndexByte(off, 0x1b) >= 0 || strings.IndexByte(off, 0x07) >= 0 {
+		t.Fatalf("color-off leaked controls: %q", off)
+	}
+	if !strings.Contains(off, "lstat bad?]0;x?.txt: no such file") {
+		t.Fatalf("sanitized error text: %q", off)
+	}
+	on := renderAll(t, Options{Color: ColorAlways, Icons: IconNone, IsTTY: tty(true), Columns: 80}, []detect.Result{row})
+	if strings.Contains(on, inj) || strings.IndexByte(on, 0x07) >= 0 {
+		t.Fatalf("color-on kept the OSC sequence: %q", on)
+	}
+	for i := 0; i < len(on); i++ {
+		if on[i] != 0x1b {
+			continue
+		}
+		if i+1 >= len(on) || on[i+1] != '[' {
+			t.Fatalf("non-SGR escape at %d in %q", i, on)
+		}
+	}
+}
+
+func TestVirtualTerminalFailureDisablesColor(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	orig := enableVirtualTerminal
+	t.Cleanup(func() { enableVirtualTerminal = orig })
+	enableVirtualTerminal = func(io.Writer) bool { return false }
+
+	got := renderAll(t, Options{Color: ColorAlways, Icons: IconUnicode, IsTTY: tty(true), Columns: 80}, []detect.Result{rowGoMod()})
+	if strings.IndexByte(got, 0x1b) >= 0 {
+		t.Fatalf("color stayed on after VT enable failed: %q", got)
+	}
+	if !strings.Contains(got, "⌘") {
+		t.Fatalf("icons were cleared with color: %q", got)
 	}
 }
 

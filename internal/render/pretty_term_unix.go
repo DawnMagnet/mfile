@@ -1,4 +1,4 @@
-//go:build unix
+//go:build aix || linux || solaris || zos || darwin || dragonfly || freebsd || netbsd || openbsd
 
 package render
 
@@ -9,12 +9,14 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func platformEnableVirtualTerminal(io.Writer) bool { return true }
+
 func isTerminal(w io.Writer) bool {
 	f, ok := w.(*os.File)
 	if !ok {
 		return false
 	}
-	_, err := unix.IoctlGetTermios(int(f.Fd()), unix.TCGETS)
+	_, err := unix.IoctlGetTermios(int(f.Fd()), ioctlReadTermios)
 	return err == nil
 }
 
