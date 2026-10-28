@@ -1,0 +1,184 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+permissions:
+  contents: read
+
+# A new push to the same branch cancels the in-progress run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # Workflow permissions are contents: read, which cannot save the Actions cache.
+          cache: false
+
+      - name: gofmt
+        run: |
+          set -euo pipefail
+          unformatted=$(gofmt -l .)
+          if [ -n "${unformatted}" ]; then
+            echo "gofmt -l found unformatted files:"
+            printf '%s\n' "${unformatted}"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+          # Workflow permissions are contents: read, which cannot save the Actions cache.
+          skip-cache: true
+          args: --timeout=5m
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # -race needs cgo. ubuntu-latest ships gcc, so the race detector can run.
+      # -race also enables checkptr. github.com/gomlx/compute's matmul packing
+      # (internal/gobackend/dot/matmul.unsafePackRHS) then aborts with
+      # "fatal error: checkptr: pointer arithmetic result points to invalid
+      # allocation" before any race report. -d=checkptr=0 keeps the race
+      # detector and skips that extra instrumentation. The static-build job
+      # still compiles with CGO_ENABLED=0.
+      - name: Test
+        run: go test -race -gcflags=all=-d=checkptr=0 -timeout 20m ./...
+
+  static-build:
+    name: static-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build static binary
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/mfile ./cmd/mfile
+          if ldd bin/mfile >/tmp/ldd.out 2>&1; then
+            echo "expected a static binary, ldd reported dynamic libraries:"
+            cat /tmp/ldd.out
+            exit 1
+          fi
+          # ldd exits non-zero for a static binary and prints this message.
+          grep -q "not a dynamic executable" /tmp/ldd.out
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          out=$(./bin/mfile cmd/mfile/main.go LICENSE)
+          printf '%s\n' "${out}"
+          if [ -z "${out}" ]; then
+            echo "smoke test produced empty output"
+            exit 1
+          fi
+
+      - name: Record binary size
+        run: |
+          set -euo pipefail
+          bytes=$(stat -c%s bin/mfile)
+          human=$(numfmt --to=iec-i --suffix=B "${bytes}")
+          echo "mfile binary size: ${bytes} bytes (${human})"
+          {
+            echo "### Static binary"
+            echo ""
+            echo "| binary | bytes | human |"
+            echo "| --- | ---: | --- |"
+            echo "| \`bin/mfile\` (CGO_ENABLED=0) | ${bytes} | ${human} |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  # go.mod requires Go 1.27.3. GOEXPERIMENT=simd has shipped since Go 1.26
+  # (still experimental in 1.27), so this job is required. arm64 is not run.
+  simd:
+    name: simd
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build with GOEXPERIMENT=simd
+        env:
+          CGO_ENABLED: "0"
+          GOEXPERIMENT: simd
+        run: |
+          set -euo pipefail
+          go build -trimpath -ldflags='-s -w' -o bin/mfile ./cmd/mfile
+          bytes=$(stat -c%s bin/mfile)
+          human=$(numfmt --to=iec-i --suffix=B "${bytes}")
+          echo "simd binary size: ${bytes} bytes (${human})"
+          {
+            echo "### SIMD binary (amd64, GOEXPERIMENT=simd, CGO_ENABLED=0)"
+            echo ""
+            echo "| binary | bytes | human |"
+            echo "| --- | ---: | --- |"
+            echo "| \`bin/mfile\` | ${bytes} | ${human} |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          out=$(./bin/mfile cmd/mfile/main.go LICENSE)
+          printf '%s\n' "${out}"
+          if [ -z "${out}" ]; then
+            echo "simd smoke test produced empty output"
+            exit 1
+          fi
+
+      - name: Test with GOEXPERIMENT=simd
+        env:
+          CGO_ENABLED: "0"
+          GOEXPERIMENT: simd
+        run: go test ./...

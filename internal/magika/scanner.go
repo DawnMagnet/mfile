@@ -208,14 +208,14 @@ func (s *Scanner) run(rows [][]int32) ([][]float32, error) {
 	in := tensors.FromFlatDataAndDimensions(flat, len(rows), s.inLen)
 	// Finalize tensors eagerly so their backend buffers return to the pool
 	// for the next call instead of waiting for the GC.
-	defer in.FinalizeAll()
+	defer func() { _ = in.FinalizeAll() }()
 	out, err := s.exec.Call(in)
 	if err != nil {
 		return nil, fmt.Errorf("run model: %w", err)
 	}
 	defer func() {
 		for _, t := range out {
-			t.FinalizeAll()
+			_ = t.FinalizeAll()
 		}
 	}()
 	probs, err := tensors.CopyFlatData[float32](out[0])
