@@ -1,0 +1,10 @@
+name = "qa-sample"
+enabled = true
+retries = 3
+
+[service]
+host = "localhost"
+port = 8080
+
+[[tags]]
+name = "corpus"

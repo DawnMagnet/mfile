@@ -1,0 +1,6 @@
+{
+  "name": "qa-sample",
+  "enabled": true,
+  "retries": 3,
+  "tags": ["corpus", "mfile"]
+}
