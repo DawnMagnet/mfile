@@ -79,8 +79,11 @@ func TestParseHelpAndUnknown(t *testing.T) {
 	if !strings.Contains(buf.String(), "--dereference") || !strings.Contains(buf.String(), "-L") {
 		t.Fatalf("help flags:\n%s", buf.String())
 	}
-	if !strings.Contains(buf.String(), "MFILE_CPU_GUARD") || !strings.Contains(buf.String(), "Set it to 1") {
+	if !strings.Contains(buf.String(), "MFILE_CPU_GUARD") || !strings.Contains(buf.String(), "debugging only") || !strings.Contains(buf.String(), "SIGILL") {
 		t.Fatalf("help missing guard note:\n%s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "AVX without AVX2") || !strings.Contains(buf.String(), "AVX2 without FMA") {
+		t.Fatalf("help missing affected CPUs:\n%s", buf.String())
 	}
 
 	buf.Reset()

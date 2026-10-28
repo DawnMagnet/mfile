@@ -31,6 +31,10 @@ mfile [-json] [-L] [-workers N] [-batch N] [-stats] FILE...
 (PeakWorkingSetSize on Windows, VmHWM on Linux) to stderr. `-cpuprofile` and
 `-memprofile` write pprof profiles.
 
+`MFILE_CPU_GUARD` is an internal variable. Setting it manually is for
+debugging only and will crash with SIGILL on affected CPUs (AVX without
+AVX2, or AVX2 without FMA).
+
 ## Model patch
 
 The embedded model is `assets/standard_v3_3/model.patched.onnx`, an

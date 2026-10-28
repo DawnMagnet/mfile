@@ -1,6 +1,7 @@
 package version
 
 import (
+	"os"
 	"runtime"
 	"strings"
 	"testing"
@@ -18,17 +19,45 @@ func TestResolve(t *testing.T) {
 }
 
 func TestFormatReportsPathAndGuard(t *testing.T) {
-	t.Setenv(cpuguard.MarkerVar, cpuguard.MarkerValue)
-	out := Format("testver")
-	path := SIMDPath(hostCPU(), currentRuntime())
-	want := "mfile testver\n" + runtime.Version() + "\nGOAMD64=" + goamd64Label() + "\nsimd=" + path + "\ncpu_guard=true\n"
-	if out != want {
-		t.Fatalf("format:\n%s\nwant:\n%s", out, want)
+	tests := []struct {
+		name   string
+		marker string
+		unset  bool
+		want   string
+	}{
+		{name: "unset", unset: true, want: "false"},
+		{name: "empty", marker: "", want: "false"},
+		{name: "reexec", marker: cpuguard.MarkerValue, want: "true"},
+		{name: "one", marker: "1", want: "manual"},
+		{name: "arbitrary", marker: "debug", want: "manual"},
+		{name: "reexec with trailing space", marker: "reexec ", want: "manual"},
+		{name: "uppercase", marker: "REEXEC", want: "manual"},
 	}
-	if path != PathAVX512 && path != PathAVX2 && path != PathAVX128NoSIMD && path != PathSoftware {
-		t.Fatalf("unexpected path %q", path)
-	}
-	if !strings.Contains(out, "cpu_guard=true") {
-		t.Fatalf("marker not reported:\n%s", out)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.unset {
+				t.Setenv(cpuguard.MarkerVar, "sentinel")
+				if err := os.Unsetenv(cpuguard.MarkerVar); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				t.Setenv(cpuguard.MarkerVar, tc.marker)
+			}
+			out := Format("testver")
+			path := SIMDPath(hostCPU(), currentRuntime())
+			want := "mfile testver\n" + runtime.Version() + "\nGOAMD64=" + goamd64Label() + "\nsimd=" + path + "\ncpu_guard=" + tc.want + "\n"
+			if out != want {
+				t.Fatalf("format:\n%s\nwant:\n%s", out, want)
+			}
+			if path != PathAVX512 && path != PathAVX2 && path != PathAVX128NoSIMD && path != PathSoftware {
+				t.Fatalf("unexpected path %q", path)
+			}
+			if !strings.Contains(out, "cpu_guard="+tc.want+"\n") {
+				t.Fatalf("cpu_guard field:\n%s", out)
+			}
+			if tc.want != "true" && strings.Contains(out, "cpu_guard=true") {
+				t.Fatalf("manual marker reported as a re-exec:\n%s", out)
+			}
+		})
 	}
 }

@@ -107,7 +107,7 @@ func newFlagSet(opts *Options, stderr io.Writer, argv0 string, usageErr *error) 
 		}
 		fs.PrintDefaults()
 		// Not a flag: an internal environment variable.
-		if _, err := fmt.Fprintf(stderr, "\nMFILE_CPU_GUARD is an internal variable. Set it to 1 to skip the CPU startup guard.\n"); err != nil {
+		if _, err := fmt.Fprintf(stderr, "\nMFILE_CPU_GUARD is an internal variable. Setting it manually is for debugging only and will crash with SIGILL on affected CPUs (AVX without AVX2, or AVX2 without FMA).\n"); err != nil {
 			*usageErr = err
 		}
 	}
