@@ -48,22 +48,33 @@ func TestPrettyColumns(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("width %d:\n got %q\nwant %q", tt.width, got, tt.want)
 			}
+			errText := strings.Repeat("e", 90)
 			for i, line := range strings.Split(strings.TrimSuffix(got, "\n"), "\n") {
+				if strings.Contains(line, errText) {
+					continue
+				}
 				if w := displayWidth(line); w > tt.width {
 					t.Errorf("line %d width %d > %d: %q", i, w, tt.width, line)
 				}
 			}
-			if !strings.Contains(got, "low") || !strings.Contains(got, "error:") {
-				t.Errorf("marker dropped:\n%s", got)
+			if !strings.Contains(got, "low") || strings.Count(got, errText) != 1 || strings.Contains(got, "error:") {
+				t.Errorf("error text not verbatim once:\n%s", got)
 			}
 		})
 	}
 	unicode := renderAll(t, Options{Color: ColorAlways, Icons: IconUnicode, IsTTY: tty(true), Columns: 80}, rows)
 	plain := stripANSI(unicode)
-	if !strings.Contains(plain, "⌘") || !strings.Contains(plain, "low") || !strings.Contains(plain, "error:") {
+	errText := strings.Repeat("e", 90)
+	if !strings.Contains(plain, "⌘") || !strings.Contains(plain, "low") || strings.Count(plain, errText) != 1 {
 		t.Fatalf("unicode 80 dropped a required field:\n%s", plain)
 	}
+	if !strings.Contains(plain, "✖") {
+		t.Fatalf("unicode 80 missing error icon:\n%s", plain)
+	}
 	for i, line := range strings.Split(strings.TrimSuffix(plain, "\n"), "\n") {
+		if strings.Contains(line, errText) {
+			continue
+		}
 		if w := displayWidth(line); w > 80 {
 			t.Errorf("unicode line %d width %d: %q", i, w, line)
 		}
@@ -334,41 +345,52 @@ func TestPrettyWidth(t *testing.T) {
 
 func TestPrettyErrors(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
-	row := detect.Result{Index: 0, Path: "missing.bin", Error: "stat missing.bin: no such file"}
+	const errText = "cannot open 'missing.bin' (No such file or directory)"
+	row := detect.Result{Index: 0, Path: "missing.bin", Error: errText}
 	ok := rowGoMod()
 	ok.Index = 1
 
 	off := renderAll(t, Options{Color: ColorNever, Icons: IconNone}, []detect.Result{row, ok})
-	on := renderAll(t, Options{Color: ColorAlways, Icons: IconUnicode}, []detect.Result{row, ok})
-	if !strings.Contains(off, "missing.bin") || !strings.Contains(off, "error: stat missing.bin: no such file") {
-		t.Fatalf("error row: %q", off)
+	if strings.Count(off, errText) != 1 {
+		t.Fatalf("non-TTY error text count: %q", off)
 	}
-	if strings.Contains(strings.Split(off, "\n")[0], "score=") {
-		t.Fatalf("error row should not look like a detection: %q", off)
+	if strings.Contains(off, "\x1b") || strings.Contains(off, "error: "+errText) {
+		t.Fatalf("non-TTY rewrote the error row: %q", off)
 	}
 	if strings.Count(off, "\n") != 2 {
 		t.Fatalf("error and ok row: %q", off)
 	}
-	// The text prefix is present with color, and the message is red.
-	if !strings.Contains(on, "error: stat missing.bin: no such file") {
-		t.Fatalf("color error row dropped the prefix: %q", on)
+	if strings.Contains(strings.Split(off, "\n")[0], "score=") {
+		t.Fatalf("error row should not look like a detection: %q", off)
 	}
-	if !strings.Contains(on, "\x1b[1;31merror:") {
-		t.Fatalf("error text is not red: %q", on)
+
+	on := renderAll(t, Options{Color: ColorAlways, Icons: IconUnicode, IsTTY: tty(true), Columns: 80}, []detect.Result{row})
+	if strings.Count(stripANSI(on), errText) != 1 {
+		t.Fatalf("TTY error text count: %q", on)
+	}
+	if !strings.Contains(on, "\x1b[1;31m"+errText+"\x1b[0m") {
+		t.Fatalf("TTY error text is not the verbatim red string: %q", on)
 	}
 	if !strings.Contains(on, "✖") {
 		t.Fatalf("unicode error icon missing: %q", on)
 	}
-	nl := renderAll(t, Options{Color: ColorNever, Icons: IconNone}, []detect.Result{{
-		Index: 0, Path: "bad", Error: "boom\nhere",
-	}})
-	if strings.Contains(nl, "boom\nhere") || !strings.Contains(nl, "error: boom?here") {
-		t.Fatalf("error newline was not sanitized: %q", nl)
+	nerd := renderAll(t, Options{Color: ColorNever, Icons: IconNerd}, []detect.Result{row})
+	if strings.Count(nerd, errText) != 1 || !strings.Contains(nerd, "\uf00d ") {
+		t.Fatalf("nerd error row: %q", nerd)
 	}
+	none := renderAll(t, Options{Color: ColorNever, Icons: IconNone, IsTTY: tty(true), Columns: 80}, []detect.Result{row})
+	if none != goldenError80 {
+		t.Fatalf("80-col error:\n got %q\nwant %q", none, goldenError80)
+	}
+	if strings.Contains(none, "✖") || strings.Contains(none, "\uf00d") {
+		t.Fatalf("icons=none printed an error icon: %q", none)
+	}
+
 	// Path columns of the error row and the following row match.
 	lines := strings.Split(strings.TrimSuffix(stripANSI(on), "\n"), "\n")
-	if widthBefore(lines[0], "missing.bin") != widthBefore(lines[1], "go.mod") {
-		t.Fatalf("error path column drifted:\n%s\n%s", lines[0], lines[1])
+	okLine := renderAll(t, Options{Color: ColorNever, Icons: IconUnicode, IsTTY: tty(true), Columns: 80}, []detect.Result{ok})
+	if widthBefore(lines[0], "missing.bin") != widthBefore(strings.TrimSuffix(okLine, "\n"), "go.mod") {
+		t.Fatalf("error path column drifted:\n%s\n%s", lines[0], okLine)
 	}
 }
 
@@ -658,32 +680,35 @@ func widthBefore(s, needle string) int {
 	return displayWidth(s[:i])
 }
 
+// goldenError80 is one icons=none error row at 80 columns. The error text is verbatim.
+const goldenError80 = "missing.bin       cannot open 'missing.bin' (No such file or directory)\n"
+
 // goldenOff is the color-off rendering of rowGoMod, rowLow, and rowError.
 const goldenColumnsFull = "go.mod                        Verilog source                code          score=0.745   size=555B       model      verilog           text/x-verilog\n" +
 	"notes.txt                     ASCII text                    text          score=0.250~  size=12B        fallback   txt               text/plain  low\n" +
 	"dir/dir/dir/...dir/readme.md  ASCII text                    text          score=0.900   size=4.0KiB     model      txt               text/plain\n" +
-	"missing.bin                   error: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n"
+	"missing.bin                   eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n"
 
 const goldenColumns80 = "go.mod            Verilog source                code          score=0.745 \n" +
 	"notes.txt         ASCII text                    text          score=0.250~  low\n" +
 	"dir/di...adme.md  ASCII text                    text          score=0.900 \n" +
-	"missing.bin       error: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee...\n"
+	"missing.bin       eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n"
 
 const goldenColumns100 = "go.mod            Verilog source                code          score=0.745   size=555B     \n" +
 	"notes.txt         ASCII text                    text          score=0.250~  size=12B        low\n" +
 	"dir/di...adme.md  ASCII text                    text          score=0.900   size=4.0KiB   \n" +
-	"missing.bin       error: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee...\n"
+	"missing.bin       eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n"
 
 const goldenColumns120 = "go.mod               Verilog source                code          score=0.745   size=555B       model    \n" +
 	"notes.txt            ASCII text                    text          score=0.250~  size=12B        fallback   low\n" +
 	"dir/dir/...eadme.md  ASCII text                    text          score=0.900   size=4.0KiB     model    \n" +
-	"missing.bin          error: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n"
+	"missing.bin          eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n"
 
 const goldenOff = "go.mod                        Verilog source                code          score=0.745   size=555B       model      verilog           text/x-verilog\n" +
 	"notes.txt                     ASCII text                    text          score=0.250~  size=12B        fallback   txt               text/plain  low\n" +
-	"missing.bin                   error: no such file\n"
+	"missing.bin                   no such file\n"
 
 // goldenOn is the same rows with ColorAlways and IconsNone.
 const goldenOn = "\x1b[1mgo.mod                      \x1b[0m  \x1b[36mVerilog source              \x1b[0m  \x1b[36mcode        \x1b[0m  \x1b[2mscore=0.745 \x1b[0m  \x1b[2msize=555B     \x1b[0m  \x1b[2mmodel    \x1b[0m  \x1b[2mverilog         \x1b[0m  \x1b[2mtext/x-verilog\x1b[0m\n" +
 	"\x1b[1mnotes.txt                   \x1b[0m  \x1b[32mASCII text                  \x1b[0m  \x1b[32mtext        \x1b[0m  \x1b[2mscore=0.250~\x1b[0m  \x1b[2msize=12B      \x1b[0m  \x1b[2mfallback \x1b[0m  \x1b[2mtxt             \x1b[0m  \x1b[2mtext/plain\x1b[0m  \x1b[1;4mlow\x1b[0m\n" +
-	"\x1b[1;31mmissing.bin                 \x1b[0m  \x1b[1;31merror: no such file\x1b[0m\n"
+	"\x1b[1;31mmissing.bin                 \x1b[0m  \x1b[1;31mno such file\x1b[0m\n"

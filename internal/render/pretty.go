@@ -108,7 +108,8 @@ func (p *Pretty) format(r detect.Result) string {
 	b.WriteString(colSep)
 
 	if failed {
-		b.WriteString(paint(p.color, sgrErr, p.fitError(r.Error)))
+		// Result.Error is already the message. Do not prefix, parse, or clip it.
+		b.WriteString(paint(p.color, sgrErr, r.Error))
 		b.WriteByte('\n')
 		return b.String()
 	}
@@ -150,26 +151,6 @@ func (p *Pretty) format(r detect.Result) string {
 	}
 	b.WriteByte('\n')
 	return b.String()
-}
-
-// fitError keeps the "error:" prefix. On a TTY the message is clipped so
-// the row stays within the terminal width; the prefix is never removed.
-func (p *Pretty) fitError(msg string) string {
-	const prefix = "error: "
-	msg = sanitize(msg)
-	if p.lay.cols <= 0 {
-		return prefix + msg
-	}
-	used := p.lay.pathW + len(colSep)
-	if p.icons != iconsNone {
-		used += iconCols
-	}
-	remain := p.lay.cols - used
-	prefixW := displayWidth(prefix)
-	if remain <= prefixW {
-		return prefix + msg
-	}
-	return prefix + truncEnd(msg, remain-prefixW)
 }
 
 // unclassified describes a path detect did not classify. Kind is one of
