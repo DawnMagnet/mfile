@@ -71,8 +71,9 @@ func main() {
 	if *memProfile != "" {
 		if f, err := os.Create(*memProfile); err == nil {
 			runtime.GC()
-			pprof.WriteHeapProfile(f)
-			f.Close()
+			// Best-effort diagnostic dump: keep the process exit code unchanged.
+			_ = pprof.WriteHeapProfile(f)
+			_ = f.Close()
 		}
 	}
 	if opts.stats {
@@ -101,7 +102,7 @@ func run(paths []string, opts options) (bool, error) {
 	var files []*os.File
 	defer func() {
 		for _, f := range files {
-			f.Close()
+			_ = f.Close()
 		}
 	}()
 	for i, p := range paths {

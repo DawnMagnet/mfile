@@ -1,0 +1,19 @@
+# Restrained lint set for CI.
+#
+# golangci-lint v2 merged gosimple into staticcheck. The staticcheck default
+# checks are "all" minus a few ST* style checks, which includes the S* checks
+# that used to be the gosimple linter. gofmt moved from linters to formatters.
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+formatters:
+  enable:
+    - gofmt
