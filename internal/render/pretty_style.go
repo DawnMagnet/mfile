@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/DawnMagnet/mfile/internal/detect"
 )
@@ -387,19 +388,42 @@ func sizeField(n int64) string {
 	return fmt.Sprintf("size=%-9s", humanSize(n))
 }
 
-// sanitize keeps a field on one line and strips escapes so a file name
-// cannot inject color or cursor controls.
+// sanitize matches internal/termesc.Escape. Printable UTF-8, including CJK,
+// is kept. C0, DEL, C1, invalid UTF-8, bidi controls, zero-width characters,
+// and U+2028/U+2029 are \ooo octal escapes of their UTF-8 bytes. Measure
+// width on the returned string; \033 is four columns.
 func sanitize(s string) string {
-	return strings.Map(func(r rune) rune {
-		switch {
-		case r < 0x20 || r == 0x7f:
-			return '?'
-		case r == '\u2028' || r == '\u2029':
-			return '?'
-		default:
-			return r
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if (r == utf8.RuneError && size == 1) || escapeRune(r) {
+			for _, c := range []byte(s[i : i+size]) {
+				b.WriteByte('\\')
+				b.WriteByte('0' + (c>>6)&7)
+				b.WriteByte('0' + (c>>3)&7)
+				b.WriteByte('0' + c&7)
+			}
+		} else {
+			b.WriteString(s[i : i+size])
 		}
-	}, s)
+		i += size
+	}
+	return b.String()
+}
+
+func escapeRune(r rune) bool {
+	switch {
+	case r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f):
+		return true
+	case r >= 0x200b && r <= 0x200f:
+		return true
+	case r == 0x2028 || r == 0x2029 || (r >= 0x202a && r <= 0x202e):
+		return true
+	case r >= 0x2066 && r <= 0x2069 || r == 0xfeff:
+		return true
+	default:
+		return false
+	}
 }
 
 func padWidth(s string, width int) string {

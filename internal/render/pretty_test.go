@@ -335,7 +335,7 @@ func TestPrettyWidth(t *testing.T) {
 	if strings.Contains(lines[5], "\n") || strings.Contains(got, "\x1b[31m") {
 		t.Errorf("control characters were not sanitized: %q", lines[5])
 	}
-	if !strings.Contains(lines[5], "a?b?[31m") {
+	if !strings.Contains(lines[5], "a\\012b\\033[31m") {
 		t.Errorf("sanitized path: %q", lines[5])
 	}
 	// A wide description is truncated on a rune boundary and still fills the column.
@@ -356,7 +356,7 @@ func TestPrettyErrorSanitize(t *testing.T) {
 	if strings.IndexByte(off, 0x1b) >= 0 || strings.IndexByte(off, 0x07) >= 0 {
 		t.Fatalf("color-off leaked controls: %q", off)
 	}
-	if !strings.Contains(off, "lstat bad?]0;x?.txt: no such file") {
+	if !strings.Contains(off, "lstat bad\\033]0;x\\007.txt: no such file") {
 		t.Fatalf("sanitized error text: %q", off)
 	}
 	on := renderAll(t, Options{Color: ColorAlways, Icons: IconNone, IsTTY: tty(true), Columns: 80}, []detect.Result{row})

@@ -107,6 +107,38 @@ func TestFitLayout(t *testing.T) {
 	}
 }
 
+func TestTerminalEscapes(t *testing.T) {
+	// Replace sanitize with termesc.Escape when that package lands.
+	escape := sanitize
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "ESC", in: "\x1b", want: `\033`},
+		{name: "BEL", in: "\x07", want: `\007`},
+		{name: "newline", in: "\n", want: `\012`},
+		{name: "invalid byte", in: "\xff", want: `\377`},
+		{name: "U+202E", in: "\u202e", want: `\342\200\256`},
+		{name: "U+2028", in: "\u2028", want: `\342\200\250`},
+		{name: "Chinese filename", in: "照片.png", want: "照片.png"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := escape(tt.in)
+			if got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+			if strings.IndexByte(got, 0x1b) >= 0 || strings.IndexByte(got, 0x07) >= 0 {
+				t.Fatalf("raw control in %q", got)
+			}
+		})
+	}
+	if w := displayWidth(escape("\x1b")); w != 4 {
+		t.Fatalf(`display width of \033 = %d, want 4`, w)
+	}
+}
+
 func TestSizeUnits(t *testing.T) {
 	tests := []struct {
 		n    int64

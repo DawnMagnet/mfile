@@ -113,8 +113,8 @@ func (p *Pretty) format(r detect.Result) string {
 	b.WriteString(colSep)
 
 	if failed {
-		// Result.Error is the message. Do not prefix or rewrite it, but
-		// strip controls so a path inside the text cannot inject escapes.
+		// Result.Error is the message. Do not prefix it. sanitize only
+		// octal-escapes controls; the rest of the text is unchanged.
 		b.WriteString(paint(p.color, sgrErr, sanitize(r.Error)))
 		b.WriteByte('\n')
 		return b.String()
