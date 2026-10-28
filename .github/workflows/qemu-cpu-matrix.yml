@@ -1,0 +1,52 @@
+name: qemu-cpu-matrix
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+permissions:
+  contents: read
+
+# A new push to the same branch cancels the in-progress matrix. It is slow.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Stable name so it can be added as a required check later.
+  # Turning that on is a repository setting and is intentionally not done here.
+  qemu-cpu-matrix:
+    name: qemu-cpu-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # upload-artifact writes to the Actions API. Job permissions replace the
+    # workflow permissions, so contents: read is repeated.
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # Workflow permissions are contents: read, which cannot save the Actions cache.
+          cache: false
+
+      - name: QEMU CPU matrix
+        run: scripts/ci/qemu-matrix.sh
+
+      - name: Upload qemu matrix logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: qemu-cpu-matrix-logs
+          path: bin/qemu-matrix/
+          if-no-files-found: warn
+          retention-days: 14
