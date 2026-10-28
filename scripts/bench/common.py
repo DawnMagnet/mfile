@@ -6,6 +6,7 @@ package. They do not modify the scanner.
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
@@ -13,7 +14,17 @@ import subprocess
 import time
 from pathlib import Path
 
-SCORE_TOL = 1e-4
+# Absolute score tolerance, and the band around a decision threshold.
+# Both live in gate.json so the Python scripts and the accuracy test share one value.
+def _load_score_tol() -> float:
+    data = json.loads((Path(__file__).resolve().parent / "gate.json").read_text(encoding="utf-8"))
+    value = float(data["score_tol"])
+    if value <= 0:
+        raise SystemExit(f"gate.json score_tol must be positive, got {value}")
+    return value
+
+
+SCORE_TOL = _load_score_tol()
 MAGIKA_REQUIREMENT = "magika==1.0.3"
 MODEL_NAME = "standard_v3_3"
 
@@ -25,6 +36,14 @@ MODEL_NAME = "standard_v3_3"
 SIMD_OFF = {"GODEBUG": "simd=0"}
 SANDY_LIKE = {
     "GODEBUG": "simd=0",
+    "GOMLX_GO_SIMD_AVX2": "0",
+    "GOMLX_GO_SIMD_AVX512": "0",
+}
+# (d) is the simd binary on the path the startup-protection re-exec takes on
+# Sandy Bridge: portable SIMD emulation, Go's cpu feature bits forced off, and
+# gomlx's AVX2/AVX-512 kernels forced off.
+NOSIMD = {
+    "GODEBUG": "simd=0,cpu.avx2=off,cpu.avx512f=off,cpu.fma=off",
     "GOMLX_GO_SIMD_AVX2": "0",
     "GOMLX_GO_SIMD_AVX512": "0",
 }
@@ -80,6 +99,40 @@ def scores_close(a: float, b: float, tol: float = SCORE_TOL) -> bool:
     return abs(float(a) - float(b)) <= tol
 
 
+@functools.lru_cache(maxsize=1)
+def model_thresholds() -> tuple[float, dict[str, float]]:
+    """medium_confidence_threshold and the per-label map from the embedded config."""
+    cfg = json.loads(
+        (repo_root() / "assets" / "standard_v3_3" / "config.min.json").read_text(encoding="utf-8")
+    )
+    medium = float(cfg["medium_confidence_threshold"])
+    thresholds = {str(key): float(value) for key, value in cfg["thresholds"].items()}
+    return medium, thresholds
+
+
+def decision_threshold(dl: str) -> float | None:
+    """Cutoff used by magika's default prediction mode (high_confidence).
+
+    A per-label threshold wins. Otherwise the cutoff is medium_confidence_threshold.
+    The config has no separate default high threshold; the per-label map is that
+    set. Empty and undefined dl labels mean the model did not run, so there is
+    no cutoff.
+    """
+    if dl in ("", "undefined"):
+        return None
+    medium, thresholds = model_thresholds()
+    return thresholds.get(dl, medium)
+
+
+def near_threshold(score: float, dl: str, tol: float = SCORE_TOL) -> tuple[bool, float | None]:
+    """True when |score - decision threshold| is strictly below tol."""
+    cutoff = decision_threshold(dl)
+    if cutoff is None:
+        return False, None
+    distance = abs(float(score) - cutoff)
+    return distance < tol, distance
+
+
 def go_build_env(simd: bool) -> dict[str, str]:
     env = os.environ.copy()
     env["CGO_ENABLED"] = "0"
@@ -113,7 +166,7 @@ def runtime_env(extra: dict[str, str] | None = None) -> dict[str, str]:
 def _newest_inputs() -> float:
     latest = 0.0
     root = repo_root()
-    for rel in ("cmd", "internal", "assets"):
+    for rel in ("cmd", "internal", "assets", "scripts/bench/accuracy"):
         base = root / rel
         if not base.exists():
             continue

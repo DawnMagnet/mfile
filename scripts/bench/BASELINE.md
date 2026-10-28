@@ -25,9 +25,10 @@ Rusty 在 AVX-512 桌面上的参考值（不是本机）：单文件普通构�
 | (a) v1 | `CGO_ENABLED=0 GOAMD64=v1` | 默认 |
 | (b) simd | `CGO_ENABLED=0 GOEXPERIMENT=simd GOAMD64=v1` | 默认 |
 | (c) simd_off | 与 (b) 同一个二进制 | `GODEBUG=simd=0` |
+| (d) nosimd | 与 (b) 同一个二进制 | `GODEBUG=simd=0,cpu.avx2=off,cpu.avx512f=off,cpu.fma=off`，再加上 `GOMLX_GO_SIMD_AVX2=0` 和 `GOMLX_GO_SIMD_AVX512=0` |
 | sandy_like（补充） | 与 (b) 同一个二进制 | `GODEBUG=simd=0 GOMLX_GO_SIMD_AVX2=0 GOMLX_GO_SIMD_AVX512=0` |
 
-`GODEBUG=simd=0` 只让 Go 的 `simd` 包走模拟。gomlx 的 AVX2/AVX-512 matmul 核看 CPUID 和 `GOMLX_GO_SIMD_*`，不看 `GODEBUG`。本机有 AVX-512，所以 (c) 的分数和 (b) 几乎一样，速度介于 (a) 和 (b) 之间。sandy_like 才是把这些核也关掉之后的样子，用来近似「没有 AVX2」时的核选择。它不是发布矩阵里的第四个包。
+(d) 是第 2 项启动保护在 Sandy Bridge 上重新 exec 之后实际会走的路径，这次在本机原生跑。(c) 只关了 Go `simd` 包的硬件向量，gomlx 的 AVX matmul 核仍按 CPUID 开着，所以分数和 (b) 一样、速度介于 (a) 和 (b) 之间。(d) 再把 `cpu.avx2` / `cpu.avx512f` / `cpu.fma` 和 gomlx 的两个 AVX 开关关掉。
 
 启动保护（第 2 项）还没进 master。合入之前，simd 构建在只有 AVX、没有 AVX2 的 CPU 上会 SIGILL。这次没有跑 qemu。
 
@@ -38,6 +39,7 @@ Rusty 在 AVX-512 桌面上的参考值（不是本机）：单文件普通构�
 | (a) v1 | 16.30 MiB（17088672 B） | 126.6 ms（标准差 11.5） | 121.9 ms | 38.8 MiB |
 | (b) simd | 19.72 MiB（20676768 B） | 26.3 ms（标准差 2.6） | 26.0 ms | 39.8 MiB |
 | (c) simd_off | 同 (b) | 36.3 ms（标准差 1.8） | 35.7 ms | 40.0 MiB |
+| (d) nosimd | 同 (b) | 141.6 ms（标准差 1.4） | 141.6 ms | 39.9 MiB |
 | sandy_like | 同 (b) | 144.2 ms（标准差 1.8） | 144.1 ms | 39.8 MiB |
 
 冷启动是 hyperfine，warmup 1，10 次，样本是 `testdata/corpus/code/hello.go`。每次都是新进程。
@@ -49,6 +51,7 @@ Rusty 在 AVX-512 桌面上的参考值（不是本机）：单文件普通构�
 | (a) v1 | 5.7 ms | 83.4 ms | 32.8 ms | 116.2 ms | 72% |
 | (b) simd | 5.2 ms | 15.3 ms | 2.0 ms | 17.3 ms | 88% |
 | (c) simd_off | 5.0 ms | 23.1 ms | 5.1 ms | 28.2 ms | 82% |
+| (d) nosimd | 5.4 ms | 95.1 ms | 38.3 ms | 133.4 ms | 71% |
 | sandy_like | 5.6 ms | 105.8 ms | 28.8 ms | 134.6 ms | 79% |
 
 单文件时间里，模型加载只有大约 5 ms。大头是第一次推理时编译计算图，不是把权重读进来。
@@ -64,6 +67,7 @@ Rusty 在 AVX-512 桌面上的参考值（不是本机）：单文件普通构�
 | (a) v1 | 301.05 s | 39.9 | 300.75 s（39.9 files/s） | 336.7 / 336.5 MiB |
 | (b) simd | 23.49 s | 510.8 | 23.24 s（516.3 files/s） | 366.2 / 365.7 MiB |
 | (c) simd_off | 61.41 s | 195.4 | 61.16 s（196.2 files/s） | 376.1 / 375.7 MiB |
+| (d) nosimd | 374.83 s | 32.0 | 374.56 s（32.0 files/s） | 332.5 / 332.2 MiB |
 | sandy_like | 376.72 s | 31.9 | 376.42 s（31.9 files/s） | 331.6 / 331.2 MiB |
 | file -b | 2.74 s | 4374 | | ru_maxrss 25.7 MiB |
 | magika --json | 14.45 s | 830.5 | | ru_maxrss 82.7 MiB |
@@ -124,10 +128,10 @@ file 的 label 用 `file -b` 是否包含 `file_substr`。它把不少源码和�
 
 | 文件 | 期望 | mfile label | score | dl | 判断 |
 |---|---|---|---:|---|---|
-| `byname/go.mod` | txt | verilog | 0.745396 | verilog | 已知失败。模型问题：dl 就是 verilog，高于默认阈值 0.5，不会回退成 txt。词表里没有 gomod。第 5 项文件名层修。样本保留，`known_fail=1` |
-| `byname/Cargo.lock` | toml | txt | 0.999585 | txt | 模型问题。内容是 TOML，但 dl 以 0.999 判成 txt，不是低分回退。文件名层可以兜住这个文件名，模型本身没认出 TOML |
-| `byname/PKGBUILD` | shell | txt | 0.498922 | r | 模型把 dl 判成 r，分数 0.499。r 的阈值是 0.9，默认阈值也是 0.5，所以输出被打回 txt。要稳定得到 shell 得靠文件名层；放宽阈值会接受错误的 r |
-| `edge/utf16be.txt` | txt | powershell | 0.913652 | powershell | 模型问题。UTF-16 BE 被高置信度当成 PowerShell，不是缺回退。UTF-16 LE 的 dl 是 randomtxt（0.457），`overwrite_map` 收成 txt，所以 LE 通过、BE 不过 |
+| `byname/go.mod` | txt | verilog | 0.745396 | verilog | 归第 5 项文件名层。模型 dl 是 verilog（0.745，高于 0.5），词表里没有 gomod。已知失败，`known_fail=1`，样本保留 |
+| `byname/Cargo.lock` | toml | txt | 0.999585 | txt | 归第 5 项文件名层。内容是 TOML，dl 以 0.999 判成 txt |
+| `byname/PKGBUILD` | shell | txt | 0.498922 | r | 归第 5 项文件名层。dl 是 r（0.499），按 r 的阈值 0.9 回退成 txt |
+| `edge/utf16be.txt` | txt | powershell | 0.913652 | powershell | 归第 5 项 textenc：在模型之前先认 BOM / UTF-16。现在 BE 被模型高置信度判成 powershell；LE 的 dl 是 randomtxt，被 `overwrite_map` 收成 txt |
 
 另外两处 label 是对的，MIME 是空的，因为 KB 里 `mime_type` 为 null：
 
@@ -149,19 +153,30 @@ file 的 label 用 `file -b` 是否包含 `file_substr`。它把不少源码和�
 
 ## 等价性
 
-门禁是：dl label 完全一致（模型没跑时，mfile 的空 dl 和 magika 的 `undefined` 算相同），score 绝对差不超过 1e-4。输出 label 也要求一致。
+门槛常量在 `scripts/bench/gate.json` 的 `score_tol`，现在是 **5e-4**。`scripts/bench/equiv` 在下面三条都成立时退出码为 0，否则为 1：
 
-**1e-4 这一档，当前 master 达不到。** 标签没有不一致。超标的是 score。
+1. 输出 label 和 dl label 完全一致（模型没跑时，mfile 的空 dl 和 magika 的 `undefined` 算相同）。
+2. score 绝对误差 ≤ 5e-4。
+3. score 与判定阈值的距离 < 5e-4 的样本，阈值回退之后的最终 label 和 MIME 必须与 magika 完全一致。判定阈值按 magika 默认的 `high_confidence`：该 dl label 在 config 的 `thresholds` 里就用它，否则用 `medium_confidence_threshold`（0.5）。配置里没有单独的默认 high 阈值，per-label 表就是那一组。
 
-| 对比 | 最大 \|score\| | 超 1e-4 的文件 |
+**这次重跑通过。** 全部门禁对比的最大绝对误差是 **3.991e-4**（(d) 对 magika，`edge/utf16le.txt`）。接近阈值的样本 **0 个**。离阈值最近的是 `byname/flake.lock`：dl `json`，score 0.5144，阈值 0.5，距离 1.44e-2。
+
+| 对比 | 最大 \|score\| | 超过 5e-4 |
 |---|---:|---|
-| (a) v1 对 magika（onnxruntime，原始模型） | 3.43e-4 | `edge/long_line.txt`（0.450273 对 0.450616） |
-| (b) simd 对 (a) | 2.94e-4 | `byname/go.work`（0.387336 对 0.387629），`edge/long_line.txt`（1.02e-4） |
-| (c) simd_off 对 (a) | 2.94e-4 | 与 (b) 同一对文件，分数和 (b) 相同 |
-| sandy_like 对 (a) | 3.94e-4 | 上面两处，外加 `binary/hello.macho`、`edge/ascii.txt`、`edge/utf16le.txt` |
-| onnxruntime(原始 `model.onnx`) 对 onnxruntime(`model.patched.onnx`)，74 个真正跑了模型的样本 | 9.54e-7（整条概率向量的最大绝对差；argmax 全部相同） | 无 |
+| (a) 对 magika | 3.428e-4 | 无 |
+| (b) 对 magika | 2.965e-4 | 无 |
+| (c) 对 magika | 2.965e-4 | 无 |
+| (d) 对 magika | 3.991e-4 | 无 |
+| (b) 对 (a) | 2.936e-4 | 无 |
+| (c) 对 (a) | 2.936e-4 | 无 |
+| (c) 对 (b) | 0 | 无 |
+| (d) 对 (a) | 3.936e-4 | 无 |
+| (d) 对 (b) | 3.987e-4 | 无 |
+| onnxruntime(原始模型) 对 onnxruntime(patched)，74 个跑了模型的样本 | 9.54e-7，argmax 全相同 | 无 |
 
-所以这 1e-4 以上的差不是 `tools/patch_model.py` 的改写（那一项在 onnxruntime 里小于 1e-6）。它是 Go 后端相对 onnxruntime 的 float，再加上 simd 核和标量核之间的 float。(c) 在这台 AVX-512 机器上没有把分数拉回 (a)，因为 AVX matmul 核还开着。
+(d) 的分数和 (b) 不同：80 个里有 61 个 score 不一样，最大 3.987e-4（`edge/utf16le.txt`）。吞吐是 32.0 files/s，接近 (a) 的 39.9，而不是 (b) 的 510.8；冷启动 141.6 ms，也接近 (a) 的 121.9 ms，不是 (b) 的 26.0 ms。这组开关是生效的，(d) 没有留在 AVX2/AVX-512 核上。
+
+label 上的差仍然不是 `patch_model.py`：改写在 onnxruntime 里小于 1e-6。剩下的是 Go 后端 float。
 
 ### 多轮和 GC
 
@@ -170,7 +185,7 @@ file 的 label 用 `file -b` 是否包含 `file_substr`。它把不少源码和�
 - 所有轮次、所有构建、`GOGC=1` 与默认 GOGC，输出 label 和 dl label 都没有变化。
 - 同一配置重复 5 轮，以及 `GOGC=1` 对默认 GOGC 的第一轮，score 的 float32 比特相同。
 - batch 1 配 workers 1、2、4 也是比特相同。
-- batch 4 和 batch 8 相对 batch 1 有 ulp 级差别。v1 上最大 2.3e-6（`config/app.ini`），simd 上最大 3.0e-7（`byname/PKGBUILD`）。都远小于 1e-4，而且同一配置重复是稳定的，不是一轮一个数。
+- batch 4 和 batch 8 相对 batch 1 有 ulp 级差别。v1 上最大 2.3e-6（`config/app.ini`），simd 上最大 3.0e-7（`byname/PKGBUILD`）。都远小于 5e-4，而且同一配置重复是稳定的，不是一轮一个数。
 
 这次压力测试没有看到 `unsafePackRHS` 把结果悄悄改掉。用 `-gcflags=all=-d=checkptr` 编出来的 v1 二进制，在 `GODEBUG=checkptr=2` 下扫一个 Go 源文件会直接死掉，不是返回另一套 label：
 
@@ -182,4 +197,4 @@ github.com/gomlx/compute/internal/gobackend/dot/matmul.unsafePackRHS
 
 默认构建没有这条检测，所以「checkptr 能抓住的指针运算」在普通二进制里仍可能存在。本语料上它没有表现为跨轮或跨 GC 的结果漂移。
 
-`scripts/bench/equiv` 按 1e-4 退出码为 1。若以后把门槛改成实测包络（例如 5e-4）以挡住真正的回退，需要单独决定；这次没有放宽。
+`scripts/bench/equiv` 按上面三条、`score_tol = 5e-4` 重跑，退出码为 0。checkptr 构建仍然会在 `packing.go:82` fatal，那一项不计入退出码。

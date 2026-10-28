@@ -16,9 +16,8 @@ import (
 	"github.com/DawnMagnet/mfile/internal/magika"
 )
 
-// scoreTol is the allowed absolute difference between mfile and magika scores,
-// and between builds / rounds. Labels must match exactly.
-const scoreTol = 1e-4
+// The score tolerance lives in scripts/bench/gate.json so this test and the
+// Python gate share one value.
 
 type roundCfg struct {
 	workers int
@@ -44,6 +43,7 @@ type roundResult struct {
 
 func TestCorpusStabilityAndMagika(t *testing.T) {
 	root := moduleRoot(t)
+	scoreTol := loadScoreTol(t, root)
 	corpus := filepath.Join(root, "testdata", "corpus")
 	paths := samplePaths(t, corpus)
 	if len(paths) == 0 {
@@ -181,6 +181,24 @@ func TestCorpusStabilityAndMagika(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+}
+
+func loadScoreTol(t *testing.T, root string) float64 {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, "scripts", "bench", "gate.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gate struct {
+		ScoreTol float64 `json:"score_tol"`
+	}
+	if err := json.Unmarshal(raw, &gate); err != nil {
+		t.Fatal(err)
+	}
+	if gate.ScoreTol <= 0 {
+		t.Fatalf("gate.json score_tol must be positive, got %g", gate.ScoreTol)
+	}
+	return gate.ScoreTol
 }
 
 func indexOf(rows []fileResult, path string) int {

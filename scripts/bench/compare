@@ -7,7 +7,8 @@ mfile is built three ways and run once each:
   (c) the (b) binary with GODEBUG=simd=0
 
 Accuracy is against testdata/corpus/expected.tsv. Exit status is 1 when the
-three mfile runs disagree on a label or by more than 1e-4 in score. Accuracy
+three mfile runs disagree on a label or by more than scripts/bench/gate.json
+score_tol in score. Accuracy
 below 100% does not by itself fail the process: go.mod is a known failure.
 """
 

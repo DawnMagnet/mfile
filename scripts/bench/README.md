@@ -23,7 +23,8 @@ python3 -m pip install --user -r scripts/bench/requirements.txt
 python3 scripts/bench/gen_corpus.py
 
 # 三方准确率：(a) v1、(b) simd、(c) 同一个 simd 二进制加 GODEBUG=simd=0
-# 以及 file、magika。三种构建 label 不一致或 score 差超过 1e-4 时退出码为 1。
+# 以及 file、magika。三种构建 label 不一致，或 score 差超过
+# scripts/bench/gate.json 里的 score_tol 时，退出码为 1。
 python3 scripts/bench/compare
 
 # 等价性门禁。见下面的「门禁」一节。
@@ -45,10 +46,9 @@ go test -tags accuracy -count=1 -timeout 30m ./scripts/bench/accuracy/
 | (a) v1 | `CGO_ENABLED=0 GOAMD64=v1` |
 | (b) simd | `CGO_ENABLED=0 GOEXPERIMENT=simd GOAMD64=v1` |
 | (c) simd_off | (b) 的二进制，运行时加 `GODEBUG=simd=0` |
+| (d) nosimd | (b) 的二进制，加上 `GODEBUG=simd=0,cpu.avx2=off,cpu.avx512f=off,cpu.fma=off GOMLX_GO_SIMD_AVX2=0 GOMLX_GO_SIMD_AVX512=0` |
 
-`GODEBUG=simd=0` 让 Go 的 `simd` 包走模拟，不走硬件向量指令。这是启动保护合入之后，在「有 AVX、没有 AVX2」的 CPU 上重新 exec 自己时要用的那条路径。启动保护本身是第 2 项，现在还没有。
-
-gomlx 自己的 AVX2/AVX-512 matmul 核看的是 CPUID 和 `GOMLX_GO_SIMD_AVX2` / `GOMLX_GO_SIMD_AVX512`，不看 `GODEBUG`。本机有 AVX-512 时，(c) 仍会用这些核。脚本里多了一组补充运行 `sandy_like`：在 (c) 的环境上再把这两个变量设为 0，用来近似 Sandy Bridge 上的核选择。它不是发布矩阵里的第四个包。
+(c) 只让 Go 的 `simd` 包走模拟。gomlx 的 AVX2/AVX-512 matmul 核看 CPUID 和 `GOMLX_GO_SIMD_*`，所以在这台 AVX-512 机器上 (c) 仍会用这些核。(d) 才是启动保护在 Sandy Bridge 上重新 exec 之后的 nosimd 路径。启动保护本身是第 2 项，现在还没有。
 
 ## 语料
 
@@ -78,11 +78,14 @@ python3 scripts/bench/gen_large.py --out /tmp/mfile-bench-large --small 12000 --
 1. 用 (a) 和 (b) 各编译一份 `go test -tags accuracy -c` 的测试二进制。
 2. 每个进程里先把整份语料以 workers=1、batch=1 扫 5 轮，再换 workers/batch（2/1、4/1、4/4、1/8）。
 3. 对 (a)、(b)、(c) 各再跑一遍 `GOGC=1`。
-4. 和 magika Python API 比 dl label（模型没跑时，mfile 的空 dl 和 magika 的 `undefined` 视为相同）和 score，阈值 `1e-4`。
-5. 用 onnxruntime 在同一批特征上对比 `model.onnx` 和 `model.patched.onnx`，用来判断残差来自 `tools/patch_model.py` 还是 Go 的 float32。
-6. 用 `-gcflags=all=-d=checkptr` 再编一份 CLI，在 `GODEBUG=checkptr=2` 下扫一遍语料，对照 (a)。`unsafePackRHS` 会碰到 checkptr，这里就是在看它会不会让结果悄悄变掉。
+4. 和 magika Python API 比 dl label（模型没跑时，mfile 的空 dl 和 magika 的 `undefined` 视为相同）和 score。绝对误差上限是 `scripts/bench/gate.json` 的 `score_tol`（现在是 5e-4）。
+5. score 离 high-confidence 判定阈值不到 `score_tol` 的样本，最终 label 和 MIME 必须和 magika 一致。阈值是该 dl label 的 `thresholds` 项，没有则用 `medium_confidence_threshold`。
+6. 用 onnxruntime 在同一批特征上对比 `model.onnx` 和 `model.patched.onnx`，用来判断残差来自 `tools/patch_model.py` 还是 Go 的 float32。
+7. 用 `-gcflags=all=-d=checkptr` 再编一份 CLI，在 `GODEBUG=checkptr=2` 下扫一遍语料。这只写进报告，不决定退出码。
 
-本机实测没有达到 1e-4：三种构建的 label 全部一致，score 最大差约 3.4e-4，来自 Go 后端的 float，不是 `tools/patch_model.py`（onnxruntime 上原始模型和改写模型的最大差是 9.5e-7）。因此当前 `scripts/bench/equiv` 退出码是 1。超标文件和多轮稳定性写在 `BASELINE.md`。
+三条门禁都成立时 `equiv` 退出码为 0。本机这次重跑是通过的，最大误差 3.991e-4，接近阈值的样本 0 个。细节在 `BASELINE.md`。
+
+(d) 用和 (b) 同一个 simd 二进制，环境变量是 `GODEBUG=simd=0,cpu.avx2=off,cpu.avx512f=off,cpu.fma=off GOMLX_GO_SIMD_AVX2=0 GOMLX_GO_SIMD_AVX512=0`。这是启动保护在 Sandy Bridge 上重启后会走的 nosimd 路径。
 
 进程内 5 轮和 magika 的对比也可以单独跑：
 

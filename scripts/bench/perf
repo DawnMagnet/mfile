@@ -152,6 +152,7 @@ def main() -> int:
         ("simd", simd, None),
         ("simd_off", simd, common.SIMD_OFF),
         ("sandy_like", simd, common.SANDY_LIKE),
+        ("nosimd", simd, common.NOSIMD),
     ]
 
     print("# binary size")

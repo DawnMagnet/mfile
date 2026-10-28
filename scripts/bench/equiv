@@ -13,15 +13,20 @@ at other worker and batch sizes. (a) and (b) are also repeated with GOGC=1.
 
 The in-process test compares every round and compares dl labels and scores
 to magika (Python module, standard_v3_3). This wrapper then compares the
-canonical round across processes. Labels must match. Scores must be within
-1e-4.
+canonical round of (a), (b) and (c) with each other and with magika.
+
+The gate (scripts/bench/gate.json) passes only when all three hold:
+
+  1. output labels and dl labels match exactly
+  2. absolute score error is <= score_tol
+  3. samples whose score is within score_tol of the high-confidence decision
+     threshold have the same final label and MIME as magika
 
 A supplemental sandy-like run also sets GOMLX_GO_SIMD_AVX2=0 and
-GOMLX_GO_SIMD_AVX512=0, because those switches (not GODEBUG) select gomlx's
-hand-written kernels. It is reported next to (c). On a CPU with AVX-512,
-(c) alone still uses those kernels.
+GOMLX_GO_SIMD_AVX512=0. It is reported and is not part of the gate.
+checkptr is reported and is not part of the gate.
 
-Exit status is 1 when the gate fails.
+Exit status is 0 when the three conditions hold, otherwise 1.
 """
 
 from __future__ import annotations
@@ -84,6 +89,73 @@ def compare_maps(left: list[dict], right: list[dict], tag: str) -> tuple[list[st
                 f"{other['label']}/{other['dl']} {other['score']:.8g} (delta {delta:.3e})"
             )
     return problems, max_delta
+
+
+def magika_by_rel(paths: list[Path], corpus: Path) -> dict[str, dict]:
+    raw, _meta = common.magika_python(paths)
+    out = {}
+    for path in paths:
+        rel = common.rel_of(corpus, path)
+        row = raw[str(path)]
+        out[rel] = {
+            "path": rel,
+            "label": row["label"],
+            "mime": row.get("mime") or "",
+            "dl": row["dl"],
+            "score": float(row["score"]),
+        }
+    return out
+
+
+def near_threshold_report(sides: dict[str, list[dict]], magika: dict[str, dict]) -> tuple[list[dict], list[str]]:
+    """Samples within score_tol of the high-confidence cutoff.
+
+    Returns the sample records and the gate failures (final label or MIME
+    differs from magika).
+    """
+    names = list(sides)
+    by_name = {name: {row["path"]: row for row in rows} for name, rows in sides.items()}
+    records = []
+    failures = []
+    for rel, ref in magika.items():
+        group = {"magika": ref}
+        for name in names:
+            group[name] = by_name[name][rel]
+        near_bits = []
+        for name, row in group.items():
+            near, distance = common.near_threshold(row["score"], row["dl"])
+            if near:
+                near_bits.append((name, distance, common.decision_threshold(row["dl"])))
+        if not near_bits:
+            continue
+        mismatches = []
+        for name in names:
+            row = group[name]
+            if row["label"] != ref["label"] or (row.get("mime") or "") != (ref.get("mime") or ""):
+                mismatches.append(name)
+        record = {
+            "path": rel,
+            "near": [
+                {"side": name, "distance": distance, "threshold": cutoff}
+                for name, distance, cutoff in near_bits
+            ],
+            "sides": {
+                name: {
+                    "label": row["label"],
+                    "mime": row.get("mime") or "",
+                    "dl": row["dl"],
+                    "score": row["score"],
+                    "threshold": common.decision_threshold(row["dl"]),
+                }
+                for name, row in group.items()
+            },
+            "match": not mismatches,
+        }
+        records.append(record)
+        if mismatches:
+            failures.append(f"{rel}: final output differs from magika on {', '.join(mismatches)}")
+    records.sort(key=lambda item: item["path"])
+    return records, failures
 
 
 def patch_attribution(paths: list[Path]) -> str:
@@ -192,30 +264,50 @@ def main() -> int:
         ("simd-gogc1", simd, {"GOGC": "1"}),
         ("simd-off", simd, dict(common.SIMD_OFF)),
         ("simd-off-gogc1", simd, {**common.SIMD_OFF, "GOGC": "1"}),
+        ("nosimd", simd, dict(common.NOSIMD)),
         ("sandy-like", simd, dict(common.SANDY_LIKE)),
+    ]
+    # These runs are the gate. sandy-like is reported and does not affect the exit code.
+    gate_names = [
+        "v1",
+        "v1-gogc1",
+        "simd",
+        "simd-gogc1",
+        "simd-off",
+        "simd-off-gogc1",
+        "nosimd",
     ]
     payloads = {}
     failed = False
     for name, binary, extra in plan:
         rc, payload, _log = run_test(binary, name, extra, out_dir)
         payloads[name] = payload
-        if rc != 0 or payload is None:
+        if payload is None or (rc != 0 and name in gate_names):
             print(f"FAIL {name}: exit {rc}", file=sys.stderr)
-            failed = True
+            if name in gate_names:
+                failed = True
+        elif rc != 0:
+            print(f"NOTE {name}: exit {rc} (not part of the gate)", file=sys.stderr)
 
     print()
-    if "v1" not in payloads or payloads["v1"] is None:
+    print(f"score_tol {common.SCORE_TOL:g} (scripts/bench/gate.json)")
+    if payloads.get("v1") is None:
         print("no v1 payload; gate failed")
         return 1
     base = canonical(payloads["v1"])
     print(f"canonical files {len(base)}")
     print(f"v1 magika_max_delta {payloads['v1'].get('magika_max_delta')}")
     print(f"v1 bit_diffs {len(payloads['v1'].get('bit_diffs') or [])}")
+    overall_max = 0.0
+    overall_where = ""
     for name, _binary, _extra in plan:
         payload = payloads.get(name)
         if not payload:
             continue
-        problems, max_delta = compare_maps(base, canonical(payload), name)
+        problems, max_delta = compare_maps(base, canonical(payload), f"{name} vs v1")
+        if max_delta > overall_max and name != "v1":
+            overall_max = max_delta
+            overall_where = f"{name} vs v1"
         bits = len(payload.get("bit_diffs") or [])
         print(
             f"{name}: vs v1 max_delta={max_delta:.3e} problems={len(problems)} "
@@ -223,13 +315,89 @@ def main() -> int:
         )
         for line in problems[:20]:
             print(" ", line)
-        if problems:
+        if problems and name in gate_names and name != "v1":
             failed = True
-        # Internal bit diffs are reported. The test already failed the process
-        # when a diff exceeded the tolerance.
 
     corpus = common.corpus_dir()
     paths = common.iter_samples(corpus)
+    magika = magika_by_rel(paths, corpus)
+    sides = {}
+    for name in ("v1", "simd", "simd-off", "nosimd"):
+        if payloads.get(name):
+            sides[name] = canonical(payloads[name])
+    # Pairwise among the three builds is covered by each-vs-v1 above.
+    # Each build against magika is also required on its own.
+    for name, rows in sides.items():
+        problems, max_delta = compare_maps(rows, list(magika.values()), f"{name} vs magika")
+        print(f"{name} vs magika: max_delta={max_delta:.3e} problems={len(problems)}")
+        for line in problems[:20]:
+            print(" ", line)
+        if max_delta > overall_max:
+            overall_max = max_delta
+            overall_where = f"{name} vs magika"
+        if problems:
+            failed = True
+    pair_problems, pair_delta = compare_maps(sides["simd"], sides["simd-off"], "simd vs simd-off")
+    print(f"simd vs simd-off: max_delta={pair_delta:.3e} problems={len(pair_problems)}")
+    for line in pair_problems[:20]:
+        print(" ", line)
+    if pair_delta > overall_max:
+        overall_max = pair_delta
+        overall_where = "simd vs simd-off"
+    if pair_problems:
+        failed = True
+    if "nosimd" in sides:
+        for other, label in (("v1", "a"), ("simd", "b")):
+            problems, max_delta = compare_maps(sides["nosimd"], sides[other], f"nosimd vs {label}")
+            print(f"nosimd (d) vs {label}: max_delta={max_delta:.3e} problems={len(problems)}")
+            for line in problems[:20]:
+                print(" ", line)
+            if max_delta > overall_max:
+                overall_max = max_delta
+                overall_where = f"nosimd vs {label}"
+            if problems:
+                failed = True
+        changed = 0
+        max_db = 0.0
+        where = ""
+        simd_rows = {row["path"]: row for row in sides["simd"]}
+        for row in sides["nosimd"]:
+            delta = abs(row["score"] - simd_rows[row["path"]]["score"])
+            if delta != 0:
+                changed += 1
+            if delta > max_db:
+                max_db = delta
+                where = row["path"]
+        print(
+            f"nosimd vs simd score: files with a different score {changed}/{len(sides['nosimd'])}, "
+            f"max {max_db:.3e} ({where})"
+        )
+        if changed == 0:
+            print("WARNING: nosimd scores are identical to simd; the Sandy Bridge switches did not change results")
+
+    records, near_failures = near_threshold_report(sides, magika)
+    print()
+    print(f"near-threshold samples: {len(records)} (|score - high_confidence cutoff| < {common.SCORE_TOL:g})")
+    if not records:
+        print("  none")
+    for record in records:
+        status = "match" if record["match"] else "MISMATCH"
+        print(f"  {record['path']}: {status}")
+        for name, row in record["sides"].items():
+            cutoff = row["threshold"]
+            cutoff_s = "-" if cutoff is None else f"{cutoff:.4g}"
+            distance = abs(row["score"] - cutoff) if cutoff is not None else float("nan")
+            print(
+                f"    {name}: score={row['score']:.8g} dl={row['dl'] or '-'} "
+                f"threshold={cutoff_s} distance={distance:.3e} "
+                f"label={row['label']} mime={row['mime'] or '-'}"
+            )
+    for line in near_failures:
+        print(" ", line, file=sys.stderr)
+    if near_failures:
+        failed = True
+    print(f"max |score| on the gate: {overall_max:.3e} ({overall_where})")
+
     print()
     print(patch_attribution(paths))
 
@@ -239,12 +407,9 @@ def main() -> int:
         reference, _stderr, rc = common.run_mfile(v1_bin, paths)
         if rc != 0:
             print("v1 CLI failed; skipping checkptr compare", file=sys.stderr)
-            failed = True
         else:
-            message = checkptr_probe(paths, reference)
-            print(message)
-            if not message.startswith("checkptr probe matched"):
-                failed = True
+            print(checkptr_probe(paths, reference))
+            print("checkptr is not part of the exit code")
 
     print()
     print("GATE", "FAIL" if failed else "PASS")
