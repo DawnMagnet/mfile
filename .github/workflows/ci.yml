@@ -46,6 +46,12 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      # The accuracy test (scripts/bench/accuracy) is behind a build tag and
+      # needs Python magika to run, so CI never compiles it otherwise.
+      # vet only type-checks it, so API changes cannot silently break it.
+      - name: go vet (accuracy tag)
+        run: go vet -tags accuracy ./scripts/bench/accuracy/
+
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
