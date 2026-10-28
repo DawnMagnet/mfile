@@ -1,6 +1,6 @@
 //go:build amd64 && goexperiment.simd
 
-package main
+package cli
 
 // maxProcs caps GOMAXPROCS unless the GOMAXPROCS environment variable is set.
 // The Go backend keeps pooled buffers per P, so peak memory grows with
