@@ -207,7 +207,7 @@ def run_mfile(
     return results, stderr, proc.returncode
 
 
-_DUR = re.compile(r"^([0-9.]+)(ns|us|µs|μs|ms|s|m|h)$")
+_DUR_PART = re.compile(r"([0-9.]+)(ns|us|µs|μs|ms|s|m|h)")
 _STATS = re.compile(
     r"stat\+open (\S+), NewScanner (\S+), ScanAll (\S+) \((\d+) files\)"
 )
@@ -216,11 +216,7 @@ _HEAP = re.compile(r"heap sys ([0-9.]+) MiB.*GOMAXPROCS (\d+)")
 
 
 def parse_go_duration(text: str) -> float:
-    match = _DUR.match(text.strip())
-    if not match:
-        raise ValueError(f"cannot parse Go duration {text!r}")
-    value = float(match.group(1))
-    unit = match.group(2)
+    """Parse Go's time.Duration.String, including compound forms like 5m1.2s."""
     scale = {
         "ns": 1e-9,
         "us": 1e-6,
@@ -230,8 +226,12 @@ def parse_go_duration(text: str) -> float:
         "s": 1.0,
         "m": 60.0,
         "h": 3600.0,
-    }[unit]
-    return value * scale
+    }
+    raw = text.strip()
+    matches = list(_DUR_PART.finditer(raw))
+    if not matches or "".join(match.group(0) for match in matches) != raw:
+        raise ValueError(f"cannot parse Go duration {text!r}")
+    return sum(float(match.group(1)) * scale[match.group(2)] for match in matches)
 
 
 def parse_stats(stderr: str) -> dict[str, float | int]:

@@ -82,6 +82,8 @@ python3 scripts/bench/gen_large.py --out /tmp/mfile-bench-large --small 12000 --
 5. 用 onnxruntime 在同一批特征上对比 `model.onnx` 和 `model.patched.onnx`，用来判断残差来自 `tools/patch_model.py` 还是 Go 的 float32。
 6. 用 `-gcflags=all=-d=checkptr` 再编一份 CLI，在 `GODEBUG=checkptr=2` 下扫一遍语料，对照 (a)。`unsafePackRHS` 会碰到 checkptr，这里就是在看它会不会让结果悄悄变掉。
 
+本机实测没有达到 1e-4：三种构建的 label 全部一致，score 最大差约 3.4e-4，来自 Go 后端的 float，不是 `tools/patch_model.py`（onnxruntime 上原始模型和改写模型的最大差是 9.5e-7）。因此当前 `scripts/bench/equiv` 退出码是 1。超标文件和多轮稳定性写在 `BASELINE.md`。
+
 进程内 5 轮和 magika 的对比也可以单独跑：
 
 ```bash
