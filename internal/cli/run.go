@@ -10,6 +10,7 @@ import (
 
 	"github.com/DawnMagnet/mfile/internal/detect"
 	"github.com/DawnMagnet/mfile/internal/render"
+	"github.com/DawnMagnet/mfile/internal/termesc"
 )
 
 // Run scans opts.Paths and writes one result at a time to stdout.
@@ -69,7 +70,15 @@ func Run(opts Options, stdout, stderr io.Writer) (failed bool, err error) {
 		if res.Error != "" {
 			failed = true
 		}
-		if err := rnd.Write(res); err != nil {
+		written := res
+		if !opts.JSON {
+			// Plain text only. JSON encoding already escapes, and escaping
+			// first would turn \033 into a literal backslash sequence.
+			written.Path = termesc.Escape(res.Path)
+			written.Target = termesc.Escape(res.Target)
+			written.Error = termesc.Escape(res.Error)
+		}
+		if err := rnd.Write(written); err != nil {
 			return false, err
 		}
 	}
@@ -91,13 +100,16 @@ func isFSError(r detect.Result) bool {
 }
 
 // formatOpenError is file(1)'s line for a path it could not stat:
-// name: cannot open `name' (strerror).
+// name: cannot open `name' (strerror). Both path copies and the
+// parenthetical text are escaped. The trailing newline is the record
+// separator and stays a raw newline.
 func formatOpenError(path, goErr string) string {
 	detail, ok := fsErrno(path, goErr)
 	if !ok {
 		detail = goErr
 	}
-	return fmt.Sprintf("%s: cannot open `%s' (%s)\n", path, path, capitalizeErrno(detail))
+	shown := termesc.Escape(path)
+	return fmt.Sprintf("%s: cannot open `%s' (%s)\n", shown, shown, termesc.Escape(capitalizeErrno(detail)))
 }
 
 func fsErrno(path, goErr string) (string, bool) {
