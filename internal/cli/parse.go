@@ -19,21 +19,26 @@ type Options struct {
 	CPUProfile string
 	MemProfile string
 	Version    bool
-	Paths      []string
+	// ExitOnFSError is file -E. A path that cannot be opened or stat'd
+	// is written to stderr and Run reports failure. Without it, that
+	// path is ordinary stdout and is not a failure.
+	ExitOnFSError bool
+	Paths         []string
 }
 
 // longFlags are the historical single-dash names (-json, -workers, ...).
 // pflag treats a single dash as a cluster of shorthands, so Parse rewrites
 // these to long options before parsing. -L stays a shorthand.
 var longFlags = map[string]struct{}{
-	"json":       {},
-	"workers":    {},
-	"batch":      {},
-	"stats":      {},
-	"cpuprofile": {},
-	"memprofile": {},
-	"help":       {},
-	"version":    {},
+	"json":             {},
+	"workers":          {},
+	"batch":            {},
+	"stats":            {},
+	"cpuprofile":       {},
+	"memprofile":       {},
+	"help":             {},
+	"version":          {},
+	"exit-on-fs-error": {},
 }
 
 // valueFlags consume the following argument when it is not attached with '='.
@@ -94,6 +99,7 @@ func newFlagSet(opts *Options, stderr io.Writer, argv0 string, usageErr *error) 
 	})
 	fs.BoolVar(&opts.JSON, "json", false, "print one JSON object per line")
 	fs.BoolVarP(&opts.Follow, "dereference", "L", false, "follow symlinks")
+	fs.BoolVarP(&opts.ExitOnFSError, "exit-on-fs-error", "E", false, "On filesystem errors (file not found etc), instead of handling the error as regular output as POSIX mandates and keep going, issue an error message and exit")
 	fs.IntVar(&opts.Workers, "workers", 0, "concurrent inference calls (0: GOMAXPROCS)")
 	fs.IntVar(&opts.Batch, "batch", 0, "max files per inference call, a power of two (0: 1)")
 	fs.BoolVar(&opts.Stats, "stats", false, "print timings and memory use to stderr")
