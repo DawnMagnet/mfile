@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/DawnMagnet/mfile/internal/detect"
+	"github.com/DawnMagnet/mfile/internal/termesc"
 )
 
 // Plain writes one historical text line per result.
@@ -21,21 +22,25 @@ func NewPlain(w io.Writer) *Plain {
 // Begin implements Renderer.
 func (p *Plain) Begin() error { return nil }
 
-// Write implements Renderer.
+// Write implements Renderer. Path, Target, and Error are octal-escaped
+// here. The caller passes the raw detect.Result.
 func (p *Plain) Write(r detect.Result) error {
+	path := termesc.Escape(r.Path)
+	target := termesc.Escape(r.Target)
+	errText := termesc.Escape(r.Error)
 	var err error
 	switch {
 	case r.Error != "":
-		_, err = fmt.Fprintf(p.w, "%s: error: %s\n", r.Path, r.Error)
+		_, err = fmt.Fprintf(p.w, "%s: error: %s\n", path, errText)
 	case r.Classified:
 		_, err = fmt.Fprintf(p.w, "%s: %s [%s, %s, %s] score=%.3f size=%s mode=%s mtime=%s\n",
-			r.Path, r.Description, r.Label, r.MIME, r.Group, r.Score,
+			path, r.Description, r.Label, r.MIME, r.Group, r.Score,
 			humanSize(r.Size), r.Mode, r.ModTime.Format(time.DateTime))
 	case r.Target != "":
-		_, err = fmt.Fprintf(p.w, "%s: symbolic link to %s\n", r.Path, r.Target)
+		_, err = fmt.Fprintf(p.w, "%s: symbolic link to %s\n", path, target)
 	default:
 		_, err = fmt.Fprintf(p.w, "%s: %s mode=%s mtime=%s\n",
-			r.Path, r.Kind, r.Mode, r.ModTime.Format(time.DateTime))
+			path, r.Kind, r.Mode, r.ModTime.Format(time.DateTime))
 	}
 	return err
 }

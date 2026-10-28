@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/DawnMagnet/mfile/internal/detect"
+	"github.com/DawnMagnet/mfile/internal/termesc"
 )
 
 // Pretty prints one aligned line per detection result.
@@ -17,8 +18,8 @@ import (
 // shrinks first, then the label, MIME, source, and size columns drop, in
 // that order. Path, description, group, score, the low-confidence marker,
 // and error text stay. Paths wider than the column are middle-truncated on
-// rune boundaries, which keeps the file name. CJK and other wide runes count
-// as two cells. Color uses the 16 ANSI colors and is omitted when stdout is
+// the raw text, then octal-escaped, so a \ooo sequence is never cut. CJK
+// and other wide runes count as two cells. Color uses the 16 ANSI colors and is omitted when stdout is
 // not a terminal or NO_COLOR is set to a non-empty value. Icons default to
 // unicode on a terminal and to none otherwise.
 //
@@ -29,12 +30,13 @@ type Pretty struct {
 	w   io.Writer
 	opt Options
 
-	mu    sync.Mutex
-	begun bool
-	ended bool
-	color bool
-	icons iconSet
-	lay   layout
+	mu      sync.Mutex
+	begun   bool
+	ended   bool
+	color   bool
+	icons   iconSet
+	lay     layout
+	restore func() error
 }
 
 // NewPretty returns a renderer that writes to w. A nil writer is rejected
@@ -51,12 +53,21 @@ func (p *Pretty) Begin() error {
 	if p.w == nil {
 		return errors.New("render: nil writer")
 	}
+	if p.restore != nil {
+		if err := p.restore(); err != nil {
+			return err
+		}
+		p.restore = nil
+	}
 	color, icons := resolveAppearance(p.w, p.opt)
-	// On a Windows console this turns on ANSI. Failure means the console
-	// cannot show color; icons stay as already chosen.
-	if !enableVirtualTerminal(p.w) {
+	// On a Windows console this turns on ANSI and remembers the previous
+	// mode. Failure means the console cannot show color; icons stay as
+	// already chosen. End puts the saved mode back.
+	colorOK, restore := enableVirtualTerminal(p.w)
+	if !colorOK {
 		color = false
 	}
+	p.restore = restore
 	p.color = color
 	p.icons = icons
 	p.lay = resolveLayout(p.w, p.opt, icons != iconsNone)
@@ -87,6 +98,11 @@ func (p *Pretty) End() error {
 	}
 	p.begun = false
 	p.ended = true
+	restore := p.restore
+	p.restore = nil
+	if restore != nil {
+		return restore()
+	}
 	return nil
 }
 
@@ -104,7 +120,7 @@ func (p *Pretty) format(r detect.Result) string {
 		b.WriteByte(' ')
 	}
 
-	path := fitMiddle(sanitize(r.Path), p.lay.pathW)
+	path := fitMiddle(r.Path, p.lay.pathW)
 	pathSGR := sgrBold
 	if failed {
 		pathSGR = sgrErr
@@ -113,9 +129,8 @@ func (p *Pretty) format(r detect.Result) string {
 	b.WriteString(colSep)
 
 	if failed {
-		// Result.Error is the message. Do not prefix it. sanitize only
-		// octal-escapes controls; the rest of the text is unchanged.
-		b.WriteString(paint(p.color, sgrErr, sanitize(r.Error)))
+		// Result.Error is the whole message, octal-escaped, with no prefix.
+		b.WriteString(paint(p.color, sgrErr, termesc.Escape(r.Error)))
 		b.WriteByte('\n')
 		return b.String()
 	}
@@ -126,10 +141,10 @@ func (p *Pretty) format(r detect.Result) string {
 	}
 
 	sgr := groupSGR[r.Group]
-	desc := fitEnd(sanitize(r.Description), descWidth)
+	desc := fitEnd(r.Description, descWidth)
 	b.WriteString(paint(p.color, sgr, desc))
 	b.WriteString(colSep)
-	b.WriteString(paint(p.color, sgr, fitEnd(sanitize(r.Group), groupWidth)))
+	b.WriteString(paint(p.color, sgr, fitEnd(r.Group, groupWidth)))
 	b.WriteString(colSep)
 
 	low := lowConfidence(r)
@@ -140,16 +155,16 @@ func (p *Pretty) format(r detect.Result) string {
 	}
 	if p.lay.showSource {
 		b.WriteString(colSep)
-		b.WriteString(paint(p.color, sgrDim, fitEnd(sanitize(r.Source), sourceWidth)))
+		b.WriteString(paint(p.color, sgrDim, fitEnd(r.Source, sourceWidth)))
 	}
 	if p.lay.showLabel {
 		b.WriteString(colSep)
-		b.WriteString(paint(p.color, sgrDim, fitEnd(sanitize(r.Label), labelWidth)))
+		b.WriteString(paint(p.color, sgrDim, fitEnd(r.Label, labelWidth)))
 	}
 	if p.lay.showMIME {
 		b.WriteString(colSep)
 		// MIME is not padded, so a short type does not leave trailing spaces.
-		b.WriteString(paint(p.color, sgrDim, truncEnd(sanitize(r.MIME), mimeWidth)))
+		b.WriteString(paint(p.color, sgrDim, truncEnd(r.MIME, mimeWidth)))
 	}
 	if low {
 		b.WriteString(colSep)
@@ -165,17 +180,18 @@ func (p *Pretty) format(r detect.Result) string {
 func unclassified(r detect.Result) string {
 	switch {
 	case r.Target != "":
-		return "symbolic link to " + sanitize(r.Target)
+		return "symbolic link to " + termesc.Escape(r.Target)
 	case r.Kind != "":
-		return sanitize(r.Kind)
+		return termesc.Escape(r.Kind)
 	default:
 		return "unclassified"
 	}
 }
 
 // enableVirtualTerminal is the platform hook for Windows console ANSI.
-// It returns false only when enabling virtual-terminal processing fails.
-// Tests replace it to cover that fallback.
+// colorOK is false only when enabling virtual-terminal processing fails.
+// restore is nil when the writer is not a console or the mode is unchanged.
+// Tests replace it to cover that fallback and the restore path.
 var enableVirtualTerminal = platformEnableVirtualTerminal
 
 var _ Renderer = (*Pretty)(nil)

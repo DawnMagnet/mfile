@@ -11,7 +11,10 @@ import (
 
 // Options is the parsed command line.
 type Options struct {
-	JSON       bool
+	JSON bool
+	// Format is --format: plain, json, or pretty. Empty follows JSON:
+	// -json selects json, otherwise plain.
+	Format     string
 	Follow     bool
 	Workers    int
 	Batch      int
@@ -31,6 +34,7 @@ type Options struct {
 // these to long options before parsing. -L stays a shorthand.
 var longFlags = map[string]struct{}{
 	"json":             {},
+	"format":           {},
 	"workers":          {},
 	"batch":            {},
 	"stats":            {},
@@ -43,6 +47,7 @@ var longFlags = map[string]struct{}{
 
 // valueFlags consume the following argument when it is not attached with '='.
 var valueFlags = map[string]struct{}{
+	"format":     {},
 	"workers":    {},
 	"batch":      {},
 	"cpuprofile": {},
@@ -98,6 +103,7 @@ func newFlagSet(opts *Options, stderr io.Writer, argv0 string, usageErr *error) 
 		}
 	})
 	fs.BoolVar(&opts.JSON, "json", false, "print one JSON object per line")
+	fs.StringVar(&opts.Format, "format", "", "output format: plain, json, or pretty")
 	fs.BoolVarP(&opts.Follow, "dereference", "L", false, "follow symlinks")
 	fs.BoolVarP(&opts.ExitOnFSError, "exit-on-fs-error", "E", false, "On filesystem errors (file not found etc), instead of handling the error as regular output as POSIX mandates and keep going, issue an error message and exit")
 	fs.IntVar(&opts.Workers, "workers", 0, "concurrent inference calls (0: GOMAXPROCS)")

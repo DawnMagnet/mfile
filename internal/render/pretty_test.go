@@ -373,11 +373,89 @@ func TestPrettyErrorSanitize(t *testing.T) {
 	}
 }
 
+func TestPrettyTruncationDoesNotSplitEscapes(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	raw := "Generic \x1b]0;PWNED\x07" + strings.Repeat("n", 100) + "\u202e" + "end"
+	widths := []int{1, 2, 3, 4, 5, 8, 15, 16, 19, 28, 40, 80, 100, 120}
+	for _, w := range widths {
+		for _, got := range []string{fitMiddle(raw, w), fitEnd(raw, w)} {
+			if displayWidth(got) != w {
+				t.Errorf("width %d: display %d in %q", w, displayWidth(got), got)
+			}
+			if partialOctal(got) {
+				t.Errorf("width %d split an escape: %q", w, got)
+			}
+			if strings.Contains(got, "\x1b") || strings.Contains(got, "\x07") || strings.Contains(got, "\u202e") {
+				t.Errorf("width %d kept a raw control: %q", w, got)
+			}
+		}
+	}
+
+	row := detect.Result{
+		Path: raw, Description: "ASCII text", Label: "txt", MIME: "text/plain",
+		Group: "text", Score: 0.9, Source: "model", Size: 9, Classified: true,
+	}
+	short := row
+	short.Path = "short.txt"
+	for _, cols := range []int{80, 100, 120} {
+		opt := Options{Color: ColorNever, Icons: IconNone, IsTTY: tty(true), Columns: cols}
+		got := renderAll(t, opt, []detect.Result{row, short})
+		lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
+		if len(lines) != 2 {
+			t.Fatalf("cols %d: %d lines\n%s", cols, len(lines), got)
+		}
+		pathW := fitLayout(cols, false).pathW
+		for i, line := range lines {
+			if partialOctal(line) {
+				t.Errorf("cols %d line %d split an escape: %q", cols, i, line)
+			}
+			if displayWidth(takeFixed(line, pathW)) != pathW {
+				t.Errorf("cols %d line %d path width %d, want %d: %q", cols, i, displayWidth(takeFixed(line, pathW)), pathW, line)
+			}
+			if !strings.HasPrefix(dropFixed(line, pathW), "  ") {
+				t.Errorf("cols %d line %d separator: %q", cols, i, line)
+			}
+		}
+		if strings.Contains(got, "\x1b") || strings.Contains(got, "\x07") || strings.Contains(got, "\u202e") {
+			t.Errorf("cols %d raw control:\n%s", cols, got)
+		}
+	}
+
+	link := renderAll(t, Options{Color: ColorNever, Icons: IconNone}, []detect.Result{{
+		Path: "l\x1b", Kind: "symlink", Target: "t\x07\u202e",
+	}})
+	if !strings.Contains(link, `l\033`) || !strings.Contains(link, `t\007\342\200\256`) {
+		t.Fatalf("symlink target escape: %q", link)
+	}
+	if partialOctal(link) || strings.Contains(link, "\x1b") || strings.Contains(link, "\x07") {
+		t.Fatalf("symlink target split or raw: %q", link)
+	}
+}
+
+func partialOctal(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' {
+			continue
+		}
+		if i+3 >= len(s) {
+			return true
+		}
+		for k := 1; k <= 3; k++ {
+			c := s[i+k]
+			if c < '0' || c > '7' {
+				return true
+			}
+		}
+		i += 3
+	}
+	return false
+}
+
 func TestVirtualTerminalFailureDisablesColor(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
 	orig := enableVirtualTerminal
 	t.Cleanup(func() { enableVirtualTerminal = orig })
-	enableVirtualTerminal = func(io.Writer) bool { return false }
+	enableVirtualTerminal = func(io.Writer) (bool, func() error) { return false, nil }
 
 	got := renderAll(t, Options{Color: ColorAlways, Icons: IconUnicode, IsTTY: tty(true), Columns: 80}, []detect.Result{rowGoMod()})
 	if strings.IndexByte(got, 0x1b) >= 0 {
@@ -385,6 +463,81 @@ func TestVirtualTerminalFailureDisablesColor(t *testing.T) {
 	}
 	if !strings.Contains(got, "⌘") {
 		t.Fatalf("icons were cleared with color: %q", got)
+	}
+}
+
+func TestVirtualTerminalRestoresConsoleMode(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	orig := enableVirtualTerminal
+	t.Cleanup(func() { enableVirtualTerminal = orig })
+
+	var restored int
+	enableVirtualTerminal = func(io.Writer) (bool, func() error) {
+		return true, func() error {
+			restored++
+			return nil
+		}
+	}
+	var buf bytes.Buffer
+	p := NewPretty(&buf, Options{Color: ColorAlways, Icons: IconUnicode, IsTTY: tty(true), Columns: 80})
+	if err := p.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Write(rowGoMod()); err != nil {
+		t.Fatal(err)
+	}
+	if restored != 0 {
+		t.Fatalf("restored during Write: %d", restored)
+	}
+	if err := p.End(); err != nil {
+		t.Fatal(err)
+	}
+	if restored != 1 {
+		t.Fatalf("restore calls = %d, want 1", restored)
+	}
+	if err := p.End(); err != nil {
+		t.Fatal(err)
+	}
+	if restored != 1 {
+		t.Fatalf("second End restored again: %d", restored)
+	}
+
+	restored = 0
+	p = NewPretty(&bytes.Buffer{}, Options{})
+	if err := p.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	if restored != 1 {
+		t.Fatalf("re-Begin restore calls = %d, want 1", restored)
+	}
+	if err := p.End(); err != nil {
+		t.Fatal(err)
+	}
+	if restored != 2 {
+		t.Fatalf("End after re-Begin restore calls = %d, want 2", restored)
+	}
+
+	enableVirtualTerminal = func(io.Writer) (bool, func() error) { return true, nil }
+	p = NewPretty(&bytes.Buffer{}, Options{})
+	if err := p.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.End(); err != nil {
+		t.Fatalf("nil restore: %v", err)
+	}
+
+	enableVirtualTerminal = func(io.Writer) (bool, func() error) {
+		return true, func() error { return errors.New("restore failed") }
+	}
+	p = NewPretty(&bytes.Buffer{}, Options{})
+	if err := p.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.End(); err == nil || !strings.Contains(err.Error(), "restore failed") {
+		t.Fatalf("End err = %v", err)
 	}
 }
 

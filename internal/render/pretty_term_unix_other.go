@@ -4,7 +4,7 @@ package render
 
 import "io"
 
-func platformEnableVirtualTerminal(io.Writer) bool { return true }
+func platformEnableVirtualTerminal(io.Writer) (bool, func() error) { return true, nil }
 
 func isTerminal(io.Writer) bool { return false }
 

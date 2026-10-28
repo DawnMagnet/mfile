@@ -9,18 +9,28 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func platformEnableVirtualTerminal(w io.Writer) bool {
+func platformEnableVirtualTerminal(w io.Writer) (bool, func() error) {
 	f, ok := w.(*os.File)
 	if !ok {
-		return true
+		return true, nil
 	}
 	handle := windows.Handle(f.Fd())
 	var mode uint32
 	if err := windows.GetConsoleMode(handle, &mode); err != nil {
-		return true
+		// Not a console. Nothing to restore.
+		return true, nil
 	}
-	err := windows.SetConsoleMode(handle, mode|windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING)
-	return err == nil
+	next := mode | windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING
+	if err := windows.SetConsoleMode(handle, next); err != nil {
+		return false, nil
+	}
+	if next == mode {
+		// Already enabled. End is a no-op.
+		return true, nil
+	}
+	return true, func() error {
+		return windows.SetConsoleMode(handle, mode)
+	}
 }
 
 func isTerminal(w io.Writer) bool {

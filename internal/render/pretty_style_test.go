@@ -3,6 +3,8 @@ package render
 import (
 	"strings"
 	"testing"
+
+	"github.com/DawnMagnet/mfile/internal/termesc"
 )
 
 func TestDisplayWidth(t *testing.T) {
@@ -108,8 +110,7 @@ func TestFitLayout(t *testing.T) {
 }
 
 func TestTerminalEscapes(t *testing.T) {
-	// Replace sanitize with termesc.Escape when that package lands.
-	escape := sanitize
+	escape := termesc.Escape
 	tests := []struct {
 		name string
 		in   string

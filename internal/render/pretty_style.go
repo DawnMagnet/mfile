@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/DawnMagnet/mfile/internal/detect"
+	"github.com/DawnMagnet/mfile/internal/termesc"
 )
 
 // ColorMode selects when pretty output uses ANSI color.
@@ -54,7 +55,7 @@ const (
 	// bounds so a streaming writer can align rows without seeing later paths.
 	// On a narrow terminal the path bound shrinks (down to pathWidthMin) and
 	// then optional columns are dropped. Paths and descriptions longer than
-	// the bound are truncated on rune boundaries.
+	// the bound are truncated on the raw text, then octal-escaped.
 	pathWidth    = 28
 	pathWidthMin = 16
 	descWidth    = 28
@@ -388,123 +389,95 @@ func sizeField(n int64) string {
 	return fmt.Sprintf("size=%-9s", humanSize(n))
 }
 
-// sanitize matches internal/termesc.Escape. Printable UTF-8, including CJK,
-// is kept. C0, DEL, C1, invalid UTF-8, bidi controls, zero-width characters,
-// and U+2028/U+2029 are \ooo octal escapes of their UTF-8 bytes. Measure
-// width on the returned string; \033 is four columns.
-func sanitize(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); {
-		r, size := utf8.DecodeRuneInString(s[i:])
-		if (r == utf8.RuneError && size == 1) || escapeRune(r) {
-			for _, c := range []byte(s[i : i+size]) {
-				b.WriteByte('\\')
-				b.WriteByte('0' + (c>>6)&7)
-				b.WriteByte('0' + (c>>3)&7)
-				b.WriteByte('0' + c&7)
-			}
-		} else {
-			b.WriteString(s[i : i+size])
-		}
-		i += size
-	}
-	return b.String()
-}
-
-func escapeRune(r rune) bool {
-	switch {
-	case r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f):
-		return true
-	case r >= 0x200b && r <= 0x200f:
-		return true
-	case r == 0x2028 || r == 0x2029 || (r >= 0x202a && r <= 0x202e):
-		return true
-	case r >= 0x2066 && r <= 0x2069 || r == 0xfeff:
-		return true
-	default:
-		return false
-	}
-}
-
-// fitMiddle pads s to width, or middle-truncates it with "..." so a long
-// path keeps its prefix and its file name. The result is exactly width
-// display cells when width > 0.
+// fitMiddle pads s to width, or middle-truncates the raw text with "..."
+// so a long path keeps its prefix and its file name, then octal-escapes
+// the kept text. An escape is one token: \033 is four columns and is never
+// cut. The result is exactly width display cells when width > 0.
 func fitMiddle(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	w := displayWidth(s)
+	escaped := termesc.Escape(s)
+	w := displayWidth(escaped)
 	if w <= width {
-		return s + strings.Repeat(" ", width-w)
+		return escaped + strings.Repeat(" ", width-w)
 	}
 	if width <= 3 {
-		p, used := takePrefix(s, width)
-		return p + strings.Repeat(" ", width-used)
+		raw, used := takePrefix(s, width)
+		return termesc.Escape(raw) + strings.Repeat(" ", width-used)
 	}
 	budget := width - 3
 	left := budget / 2
 	right := budget - left
 	head, hw := takePrefix(s, left)
 	tail, tw := takeSuffix(s, right)
-	return head + "..." + tail + strings.Repeat(" ", width-hw-3-tw)
+	return termesc.Escape(head) + "..." + termesc.Escape(tail) + strings.Repeat(" ", width-hw-3-tw)
 }
 
-// truncEnd shortens s to width with a trailing "..." and does not pad.
+// truncEnd shortens s to width with a trailing "..." and does not pad
+// when s already fits. Truncation uses the raw text, then escapes.
 func truncEnd(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	if displayWidth(s) <= width {
-		return s
+	if displayWidth(termesc.Escape(s)) <= width {
+		return termesc.Escape(s)
 	}
 	return fitEnd(s, width)
 }
 
-// fitEnd pads s to width, or truncates it with a trailing "...".
+// fitEnd pads s to width, or truncates the raw text with a trailing "...",
+// then octal-escapes what remains.
 func fitEnd(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	w := displayWidth(s)
+	escaped := termesc.Escape(s)
+	w := displayWidth(escaped)
 	if w <= width {
-		return s + strings.Repeat(" ", width-w)
+		return escaped + strings.Repeat(" ", width-w)
 	}
 	if width <= 3 {
-		p, used := takePrefix(s, width)
-		return p + strings.Repeat(" ", width-used)
+		raw, used := takePrefix(s, width)
+		return termesc.Escape(raw) + strings.Repeat(" ", width-used)
 	}
 	head, hw := takePrefix(s, width-3)
-	return head + "..." + strings.Repeat(" ", width-hw-3)
+	return termesc.Escape(head) + "..." + strings.Repeat(" ", width-hw-3)
 }
 
+// takePrefix returns a raw prefix whose escaped display width is at most max.
+// A rune that termesc.Escape expands, and each invalid byte, is one token.
 func takePrefix(s string, max int) (string, int) {
 	if max <= 0 {
 		return "", 0
 	}
-	var b strings.Builder
 	used := 0
-	for _, r := range s {
-		w := runeWidth(r)
+	end := 0
+	for end < len(s) {
+		_, w, size := nextToken(s[end:])
 		if used+w > max {
 			break
 		}
-		b.WriteRune(r)
 		used += w
+		end += size
 	}
-	return b.String(), used
+	return s[:end], used
 }
 
+// takeSuffix returns a raw suffix whose escaped display width is at most max.
 func takeSuffix(s string, max int) (string, int) {
 	if max <= 0 {
 		return "", 0
 	}
 	type cell struct {
-		r rune
-		w int
+		start int
+		w     int
 	}
 	cells := make([]cell, 0, len(s))
-	for _, r := range s {
-		cells = append(cells, cell{r, runeWidth(r)})
+	for i := 0; i < len(s); {
+		_, w, size := nextToken(s[i:])
+		cells = append(cells, cell{i, w})
+		i += size
 	}
 	used := 0
 	i := len(cells)
@@ -516,11 +489,18 @@ func takeSuffix(s string, max int) (string, int) {
 		used += w
 		i--
 	}
-	var b strings.Builder
-	for _, c := range cells[i:] {
-		b.WriteRune(c.r)
+	if i == len(cells) {
+		return "", 0
 	}
-	return b.String(), used
+	return s[cells[i].start:], used
+}
+
+// nextToken is one raw rune, or one invalid byte. width is the display
+// width of termesc.Escape of that piece, so \ooo stays a 4-column unit.
+func nextToken(s string) (raw string, width, size int) {
+	_, size = utf8.DecodeRuneInString(s)
+	raw = s[:size]
+	return raw, displayWidth(termesc.Escape(raw)), size
 }
 
 // displayWidth reports the terminal column width of s.

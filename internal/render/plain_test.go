@@ -53,6 +53,28 @@ func TestPlainStreamsHistoricalLines(t *testing.T) {
 	}
 }
 
+func TestPlainEscapesPathTargetAndError(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewPlain(&buf)
+	if err := p.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	rows := []detect.Result{
+		{Path: "a\x1b]0;x\x07\n", Kind: "symlink", Target: "b\x07"},
+		{Path: "c\n", Error: "oops\x1b"},
+	}
+	for _, r := range rows {
+		if err := p.Write(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := "a\\033]0;x\\007\\012: symbolic link to b\\007\n" +
+		"c\\012: error: oops\\033\n"
+	if buf.String() != want {
+		t.Fatalf("got %q\nwant %q", buf.String(), want)
+	}
+}
+
 func TestHumanSize(t *testing.T) {
 	if got := humanSize(0); got != "0B" {
 		t.Fatalf("0: %s", got)

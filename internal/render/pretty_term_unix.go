@@ -9,7 +9,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func platformEnableVirtualTerminal(io.Writer) bool { return true }
+func platformEnableVirtualTerminal(io.Writer) (bool, func() error) { return true, nil }
 
 func isTerminal(w io.Writer) bool {
 	f, ok := w.(*os.File)

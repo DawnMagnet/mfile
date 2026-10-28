@@ -168,6 +168,81 @@ func TestRunJSONMissing(t *testing.T) {
 	}
 }
 
+func TestRunPrettySkipsOpenError(t *testing.T) {
+	dir := t.TempDir()
+	chinese := filepath.Join(dir, "测试.txt")
+	if err := os.WriteFile(chinese, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(dir, "\x1b]0;x\x07\n")
+
+	stdout, stderr, failed := runOut(t, Options{Format: "pretty", Paths: []string{chinese, missing}})
+	if failed || len(stderr) != 0 {
+		t.Fatalf("failed=%v stderr=%q", failed, stderr)
+	}
+	text := string(stdout)
+	if strings.Contains(text, "cannot open") {
+		t.Fatalf("pretty printed the plain open line:\n%s", text)
+	}
+	if strings.Count(text, "\n") != 2 {
+		t.Fatalf("lines:\n%q", text)
+	}
+	if !strings.Contains(text, "测试.txt") {
+		t.Fatalf("chinese:\n%s", text)
+	}
+	if !strings.Contains(text, `\033`) || !strings.Contains(text, `\007`) || !strings.Contains(text, `\012`) {
+		t.Fatalf("controls not escaped:\n%q", text)
+	}
+	for i, c := range stdout {
+		if c < 0x20 && c != '\n' || c == 0x7f {
+			t.Fatalf("raw control %#x at %d in %x", c, i, stdout)
+		}
+	}
+
+	for _, opts := range []Options{
+		{ExitOnFSError: true, Paths: []string{missing}},
+		{JSON: true, ExitOnFSError: true, Paths: []string{missing}},
+		{Format: "pretty", ExitOnFSError: true, Paths: []string{missing}},
+	} {
+		_, _, failed = runOut(t, opts)
+		if !failed {
+			t.Fatalf("%+v: -E did not fail", opts)
+		}
+	}
+	for _, opts := range []Options{
+		{Paths: []string{missing}},
+		{JSON: true, Paths: []string{missing}},
+		{Format: "pretty", Paths: []string{missing}},
+	} {
+		_, _, failed = runOut(t, opts)
+		if failed {
+			t.Fatalf("%+v: missing path failed without -E", opts)
+		}
+	}
+
+	stdout, stderr, failed = runOut(t, Options{Format: "pretty", ExitOnFSError: true, Paths: []string{chinese, missing}})
+	if !failed {
+		t.Fatal("pretty -E did not fail")
+	}
+	if strings.Contains(string(stdout)+string(stderr), "cannot open") {
+		t.Fatalf("pretty -E printed cannot open\nstdout %q\nstderr %q", stdout, stderr)
+	}
+	if len(stderr) != 0 {
+		t.Fatalf("pretty -E stderr %q", stderr)
+	}
+	if strings.Count(string(stdout), "\n") != 2 {
+		t.Fatalf("pretty -E lines %q", stdout)
+	}
+}
+
+func TestRunUnknownFormat(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	_, err := Run(Options{Format: "xml", Paths: []string{"."}}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "unknown --format") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestRunBrokenSymlinkFollow(t *testing.T) {
 	dir := t.TempDir()
 	link := filepath.Join(dir, "broken")
