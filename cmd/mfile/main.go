@@ -10,10 +10,12 @@ import (
 	"runtime/pprof"
 
 	"github.com/DawnMagnet/mfile/internal/cli"
+	"github.com/DawnMagnet/mfile/internal/cpuguard"
 	"github.com/spf13/pflag"
 )
 
 func main() {
+	cpuguard.Apply()
 	cli.CapGOMAXPROCS()
 	opts, err := cli.Parse(os.Args[1:], os.Stderr, os.Args[0])
 	if err != nil {
