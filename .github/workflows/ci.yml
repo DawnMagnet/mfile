@@ -35,7 +35,8 @@ jobs:
       - name: gofmt
         run: |
           set -euo pipefail
-          unformatted=$(gofmt -l .)
+          # Skip testdata/: corpus files are fixed bytes and must not be reformatted.
+          unformatted=$(git ls-files -z '*.go' | grep -zEv '(^|/)testdata/' | xargs -0 -r gofmt -l)
           if [ -n "${unformatted}" ]; then
             echo "gofmt -l found unformatted files:"
             printf '%s\n' "${unformatted}"
@@ -157,6 +158,7 @@ jobs:
         env:
           CGO_ENABLED: "0"
           GOEXPERIMENT: simd
+          GOAMD64: v1
         run: |
           set -euo pipefail
           go build -trimpath -ldflags='-s -w' -o bin/mfile ./cmd/mfile
@@ -186,4 +188,5 @@ jobs:
         env:
           CGO_ENABLED: "0"
           GOEXPERIMENT: simd
+          GOAMD64: v1
         run: go test ./...
