@@ -426,14 +426,6 @@ func escapeRune(r rune) bool {
 	}
 }
 
-func padWidth(s string, width int) string {
-	w := displayWidth(s)
-	if w >= width {
-		return s
-	}
-	return s + strings.Repeat(" ", width-w)
-}
-
 // fitMiddle pads s to width, or middle-truncates it with "..." so a long
 // path keeps its prefix and its file name. The result is exactly width
 // display cells when width > 0.

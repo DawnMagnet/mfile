@@ -553,8 +553,12 @@ func TestPipeIsNotTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		r.Close()
-		w.Close()
+		if err := r.Close(); err != nil {
+			t.Error(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Error(err)
+		}
 	})
 	if isTerminal(w) {
 		t.Fatal("pipe writer reported as a terminal")
