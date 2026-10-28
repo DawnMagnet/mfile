@@ -22,6 +22,15 @@ import (
 // on the Go backend: its pooled buffers scale with the batch size.
 const defaultMaxBatch = 1
 
+const (
+	// SourceModel means the model score was accepted, after overwrite_map.
+	SourceModel = "model"
+	// SourceFallback means a low score was replaced with txt or unknown.
+	SourceFallback = "fallback"
+	// SourceRule means a pre-model rule decided (empty, or below min size).
+	SourceRule = "rule"
+)
+
 // Result is the outcome of scanning one input.
 type Result struct {
 	ContentType
@@ -29,6 +38,9 @@ type Result struct {
 	Score float32 `json:"score"`
 	// DLLabel is the raw model prediction, empty when the model was not run.
 	DLLabel string `json:"dl_label,omitempty"`
+	// Source is which mechanism chose the label: model, fallback, or rule.
+	// It is omitted from JSON so existing objects stay unchanged.
+	Source string `json:"-"`
 }
 
 // Scanner runs the Magika model on the pure Go (SimpleGo) gomlx backend.
@@ -195,7 +207,7 @@ func (s *Scanner) prescan(in Input) (Result, Features, bool, error) {
 }
 
 func (s *Scanner) ruleResult(label string) Result {
-	return Result{ContentType: s.kb[label], Score: 1}
+	return Result{ContentType: s.kb[label], Score: 1, Source: SourceRule}
 }
 
 // run executes the model on the given feature rows; len(rows) is the batch
@@ -253,12 +265,14 @@ func (s *Scanner) decide(scores []float32) Result {
 	if t, ok := s.cfg.Thresholds[dl]; ok {
 		th = t
 	}
+	source := SourceModel
 	if score < th {
+		source = SourceFallback
 		if s.kb[dl].IsText {
 			label = labelTxt
 		} else {
 			label = labelUnknown
 		}
 	}
-	return Result{ContentType: s.kb[label], Score: score, DLLabel: dl}
+	return Result{ContentType: s.kb[label], Score: score, DLLabel: dl, Source: source}
 }

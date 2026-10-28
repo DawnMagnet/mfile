@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bufio"
@@ -13,7 +13,10 @@ func peakRSS() (uint64, bool) {
 	if err != nil {
 		return 0, false
 	}
-	defer func() { _ = f.Close() }()
+	defer func() {
+		// Read-only status file; a close error is not actionable.
+		_ = f.Close()
+	}()
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		v, ok := strings.CutPrefix(sc.Text(), "VmHWM:")

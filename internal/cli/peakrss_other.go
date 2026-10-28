@@ -1,6 +1,6 @@
 //go:build !windows && !linux
 
-package main
+package cli
 
 // peakRSS is not implemented on this platform.
 func peakRSS() (uint64, bool) {
