@@ -70,9 +70,9 @@ const (
 	iconCols = 2
 	lowText  = "low"
 
-	// lowScoreThreshold marks a result as low confidence. Source "fallback"
-	// is also low confidence at any score. Any other source string is shown
-	// as itself and is low only when the score is under this threshold.
+	// lowScoreThreshold marks a result as low confidence. Sources in
+	// lowSources are also low confidence at any score. Any other source
+	// string is shown as itself and is low only under this threshold.
 	lowScoreThreshold = 0.5
 )
 
@@ -353,6 +353,7 @@ func terminalColumns(w io.Writer) int {
 // this set, including ones added later, are printed unchanged.
 var lowSources = map[string]struct{}{
 	detect.SourceFallback: {},
+	"heuristic":           {},
 }
 
 func lowConfidence(r detect.Result) bool {

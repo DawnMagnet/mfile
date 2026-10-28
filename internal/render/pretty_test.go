@@ -498,6 +498,7 @@ func TestPipeIsNotTerminal(t *testing.T) {
 }
 
 func TestLowConfidenceThreshold(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
 	base := rowGoMod()
 	base.Score = 0.5
 	base.Source = "model"
@@ -514,8 +515,12 @@ func TestLowConfidenceThreshold(t *testing.T) {
 		t.Fatal("fallback should be low at any score")
 	}
 	base.Source = "heuristic"
-	if lowConfidence(base) {
-		t.Fatal("heuristic is low only when the score is under 0.5")
+	if !lowConfidence(base) {
+		t.Fatal("heuristic should be low at any score")
+	}
+	got := renderAll(t, Options{Color: ColorNever, Icons: IconNone}, []detect.Result{base})
+	if !strings.Contains(got, "heuristic") || !strings.Contains(got, "score=0.990~") || !strings.Contains(got, " low") {
+		t.Fatalf("high-score heuristic row: %q", got)
 	}
 	base.Source = detect.SourceRule
 	if lowConfidence(base) {
