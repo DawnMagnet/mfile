@@ -50,6 +50,23 @@ func TestParseStopsAtOperand(t *testing.T) {
 	}
 }
 
+func TestParseVersion(t *testing.T) {
+	opts, err := Parse([]string{"--version"}, ioDiscard(t), "mfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.Version {
+		t.Fatal("long version flag not set")
+	}
+	opts, err = Parse([]string{"-version", "file"}, ioDiscard(t), "mfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.Version || len(opts.Paths) != 1 || opts.Paths[0] != "file" {
+		t.Fatalf("%+v", opts)
+	}
+}
+
 func TestParseHelpAndUnknown(t *testing.T) {
 	var buf bytes.Buffer
 	_, err := Parse([]string{"-h"}, &buf, "mfile")

@@ -11,8 +11,13 @@ import (
 
 	"github.com/DawnMagnet/mfile/internal/cli"
 	"github.com/DawnMagnet/mfile/internal/cpuguard"
+	ver "github.com/DawnMagnet/mfile/internal/version"
 	"github.com/spf13/pflag"
 )
+
+// version is set with -ldflags "-X main.version=...".
+// An empty value falls back to build info, then "dev".
+var version string
 
 func main() {
 	cpuguard.Apply()
@@ -23,6 +28,13 @@ func main() {
 			os.Exit(0)
 		}
 		os.Exit(2)
+	}
+	if opts.Version {
+		if _, err := fmt.Fprint(os.Stdout, ver.Format(version)); err != nil {
+			fmt.Fprintln(os.Stderr, "mfile:", err)
+			os.Exit(1)
+		}
+		return
 	}
 	if len(opts.Paths) == 0 {
 		if err := cli.Usage(os.Stderr, os.Args[0]); err != nil {

@@ -18,6 +18,7 @@ type Options struct {
 	Stats      bool
 	CPUProfile string
 	MemProfile string
+	Version    bool
 	Paths      []string
 }
 
@@ -32,6 +33,7 @@ var longFlags = map[string]struct{}{
 	"cpuprofile": {},
 	"memprofile": {},
 	"help":       {},
+	"version":    {},
 }
 
 // valueFlags consume the following argument when it is not attached with '='.
@@ -97,6 +99,7 @@ func newFlagSet(opts *Options, stderr io.Writer, argv0 string, usageErr *error) 
 	fs.BoolVar(&opts.Stats, "stats", false, "print timings and memory use to stderr")
 	fs.StringVar(&opts.CPUProfile, "cpuprofile", "", "write a CPU profile to `file`")
 	fs.StringVar(&opts.MemProfile, "memprofile", "", "write a heap profile to `file` at exit")
+	fs.BoolVar(&opts.Version, "version", false, "print version, Go version, GOAMD64 level, and SIMD path")
 	fs.Usage = func() {
 		if _, err := fmt.Fprintf(stderr, "usage: %s [flags] FILE...\n", argv0); err != nil {
 			*usageErr = err
