@@ -9,7 +9,7 @@ import (
 )
 
 // JSON writes one JSON object per line, in the historical field order.
-// Source is not part of that object.
+// Source and Index are not part of that object.
 type JSON struct {
 	enc *json.Encoder
 }

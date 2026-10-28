@@ -20,16 +20,16 @@ func TestJSONStreamsHistoricalObjects(t *testing.T) {
 			Path: "go.mod", Kind: "file", Size: 599, Mode: "-rw-r--r--", ModTime: when,
 			Label: "verilog", MIME: "text/x-verilog", Group: "code", Description: "Verilog source",
 			Extensions: []string{"v", "verilog", "vlg", "vh"}, IsText: true, Score: 0.74777484,
-			DLLabel: "verilog", Source: detect.SourceModel, Classified: true,
+			DLLabel: "verilog", Source: detect.SourceModel, Classified: true, Index: 0,
 		},
 		{
 			Path: "empty", Kind: "file", Size: 0, Mode: "-rw-r--r--", ModTime: when,
 			Label: "empty", MIME: "inode/x-empty", Group: "inode", Description: "Empty file",
-			Extensions: []string{}, IsText: false, Score: 1, Source: detect.SourceRule, Classified: true,
+			Extensions: []string{}, IsText: false, Score: 1, Source: detect.SourceRule, Classified: true, Index: 1,
 		},
-		{Path: "link", Kind: "symlink", Size: 9, Mode: "Lrwxrwxrwx", ModTime: when, Target: "hello.txt"},
-		{Path: "subdir", Kind: "directory", Size: 4096, Mode: "drwxr-xr-x", ModTime: when},
-		{Path: "missing", Error: "lstat missing: no such file or directory"},
+		{Path: "link", Kind: "symlink", Size: 9, Mode: "Lrwxrwxrwx", ModTime: when, Target: "hello.txt", Index: 2},
+		{Path: "subdir", Kind: "directory", Size: 4096, Mode: "drwxr-xr-x", ModTime: when, Index: 3},
+		{Path: "missing", Error: "lstat missing: no such file or directory", Index: 4},
 	}
 	for _, r := range rows {
 		if err := j.Write(r); err != nil {
@@ -49,7 +49,7 @@ func TestJSONStreamsHistoricalObjects(t *testing.T) {
 	if got != want {
 		t.Fatalf("json output:\n%s\nwant:\n%s", got, want)
 	}
-	if bytes.Contains(buf.Bytes(), []byte(`"source"`)) {
-		t.Fatal("source leaked into JSON")
+	if bytes.Contains(buf.Bytes(), []byte(`"source"`)) || bytes.Contains(buf.Bytes(), []byte(`"index"`)) {
+		t.Fatal("source or index leaked into JSON")
 	}
 }

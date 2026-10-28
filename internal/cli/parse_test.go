@@ -79,6 +79,9 @@ func TestParseHelpAndUnknown(t *testing.T) {
 	if !strings.Contains(buf.String(), "--dereference") || !strings.Contains(buf.String(), "-L") {
 		t.Fatalf("help flags:\n%s", buf.String())
 	}
+	if !strings.Contains(buf.String(), "MFILE_CPU_GUARD") || !strings.Contains(buf.String(), "Set it to 1") {
+		t.Fatalf("help missing guard note:\n%s", buf.String())
+	}
 
 	buf.Reset()
 	_, err = Parse([]string{"--nope"}, &buf, "mfile")

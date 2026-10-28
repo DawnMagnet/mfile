@@ -43,6 +43,8 @@ type Runtime struct {
 }
 
 // SIMDPath returns the implementation this process will actually run.
+// The path is inferred by mirroring gomlx's kernel-selection logic. It is
+// not queried from gomlx, so it can drift when gomlx is upgraded.
 func SIMDPath(cpu CPUInfo, rt Runtime) string {
 	eff := effectiveCPU(cpu, rt.GODEBUG, rt.GOAMD64)
 	if rt.SIMDExperiment {

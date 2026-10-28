@@ -43,6 +43,7 @@ func Scan(paths []string, opts Options) ([]Result, Stats, error) {
 	}()
 	for i, p := range paths {
 		r := &results[i]
+		r.Index = i
 		r.Path = p
 		fi, err := stat(p, opts.Follow)
 		if err != nil {

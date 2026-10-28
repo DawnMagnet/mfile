@@ -20,6 +20,10 @@ import (
 var version string
 
 func main() {
+	// The guard runs at the start of main, after package init of the gomlx
+	// dependencies. It assumes those init functions do not execute SIMD
+	// kernels. The qemu real-inference gate (Sandy Bridge, and Haswell
+	// without FMA) is what checks that assumption.
 	cpuguard.Apply()
 	cli.CapGOMAXPROCS()
 	opts, err := cli.Parse(os.Args[1:], os.Stderr, os.Args[0])

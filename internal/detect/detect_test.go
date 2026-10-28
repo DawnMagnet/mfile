@@ -55,6 +55,12 @@ func TestScanMetadataAndRuleSource(t *testing.T) {
 	if !got[0].Classified || got[0].Label != "empty" || got[0].Source != SourceRule || got[0].Score != 1 {
 		t.Fatalf("empty: %+v", got[0])
 	}
+	// No directory walk: each input, including the directory, keeps its position.
+	for i := range got {
+		if got[i].Index != i {
+			t.Fatalf("result %d Index = %d", i, got[i].Index)
+		}
+	}
 	if got[0].MIME != "inode/x-empty" || got[0].Description != "Empty file" {
 		t.Fatalf("empty metadata: %+v", got[0])
 	}
