@@ -47,4 +47,5 @@ type Result struct {
 	Error      string
 	// Classified is true when a content type was produced for this path.
 	Classified bool
+	Index      int // pending in #3
 }

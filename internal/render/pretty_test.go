@@ -1,0 +1,579 @@
+package render
+
+import (
+	"bytes"
+	"errors"
+	"os"
+	"regexp"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/DawnMagnet/mfile/internal/detect"
+)
+
+func TestPrettyGolden(t *testing.T) {
+	// Ambient NO_COLOR must not leak into these cases.
+	t.Setenv("NO_COLOR", "")
+
+	off := Options{Color: ColorNever, Icons: IconNone}
+	on := Options{Color: ColorAlways, Icons: IconNone}
+	rows := []detect.Result{rowGoMod(), rowLow(), rowError()}
+
+	gotOff := renderAll(t, off, rows)
+	gotOn := renderAll(t, on, rows)
+
+	if gotOff != goldenOff {
+		t.Errorf("color off:\n got: %q\nwant: %q", gotOff, goldenOff)
+	}
+	if strings.Contains(gotOff, "\x1b") {
+		t.Errorf("color off contains an escape: %q", gotOff)
+	}
+	if gotOn != goldenOn {
+		t.Errorf("color on:\n got: %q\nwant: %q", gotOn, goldenOn)
+	}
+	if stripANSI(gotOn) != gotOff {
+		t.Errorf("color on stripped:\n got: %q\nwant: %q", stripANSI(gotOn), gotOff)
+	}
+	if strings.Contains(gotOn, "\x1b[38") || strings.Contains(gotOn, "\x1b[48") {
+		t.Errorf("color on uses extended color: %q", gotOn)
+	}
+
+	// Icon glyphs take the group color, and errors stay red, with color on.
+	unicode := renderAll(t, Options{Color: ColorAlways, Icons: IconUnicode}, rows)
+	if !strings.Contains(unicode, "\x1b[36m⌘\x1b[0m") {
+		t.Errorf("code icon not cyan: %q", unicode)
+	}
+	if !strings.Contains(unicode, "\x1b[32m✎\x1b[0m") {
+		t.Errorf("text icon not green: %q", unicode)
+	}
+	if !strings.Contains(unicode, "\x1b[1;31m✖\x1b[0m") {
+		t.Errorf("error icon not red: %q", unicode)
+	}
+	if stripANSI(unicode) == gotOff {
+		t.Fatal("unicode icons stripped to the no-icon golden")
+	}
+}
+
+func TestPrettyIcons(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	row := rowGoMod()
+	low := rowLow()
+	bad := rowError()
+
+	tests := []struct {
+		name    string
+		icons   IconMode
+		wantHas []string
+		wantNot []string
+	}{
+		{
+			name:    "none",
+			icons:   IconNone,
+			wantNot: []string{"⌘", "✖", "\uf121", "\uf00d"},
+		},
+		{
+			name:    "unicode",
+			icons:   IconUnicode,
+			wantHas: []string{"⌘", "✎", "✖", "✱"},
+			wantNot: []string{"\uf121", "\uf00d"},
+		},
+		{
+			name:    "nerd",
+			icons:   IconNerd,
+			wantHas: []string{"\uf121", "\uf0f6", "\uf00d", "\uf1c9"},
+			wantNot: []string{"⌘", "✖"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			paths := []string{row.Path, low.Path, rowJSON().Path, bad.Path}
+			got := renderAll(t, Options{Color: ColorNever, Icons: tt.icons}, []detect.Result{row, low, rowJSON(), bad})
+			if strings.Contains(got, "\x1b") {
+				t.Errorf("icons with color off leaked an escape: %q", got)
+			}
+			for _, s := range tt.wantHas {
+				if !strings.Contains(got, s) {
+					t.Errorf("missing %q in:\n%s", s, got)
+				}
+			}
+			for _, s := range tt.wantNot {
+				if strings.Contains(got, s) {
+					t.Errorf("unexpected %q in:\n%s", s, got)
+				}
+			}
+			// Icon column is one cell plus a space, so paths still share a column.
+			if tt.icons != IconNone {
+				lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
+				var col int
+				for i, line := range lines {
+					w := leadingWidth(line)
+					// glyph + space
+					if w < 2 {
+						t.Fatalf("line %d icon column too narrow: %q", i, line)
+					}
+					pathCol := widthBefore(line, paths[i])
+					if pathCol < 0 {
+						t.Fatalf("line %d missing path %q: %q", i, paths[i], line)
+					}
+					if i == 0 {
+						col = pathCol
+					} else if pathCol != col {
+						t.Errorf("path column %d, want %d on %q", pathCol, col, line)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestPrettyNoColorAndTTY(t *testing.T) {
+	rows := []detect.Result{rowGoMod()}
+	tests := []struct {
+		name      string
+		noColor   string
+		opt       Options
+		wantColor bool
+		wantIcon  bool
+	}{
+		{
+			name:      "auto tty",
+			opt:       Options{IsTTY: tty(true)},
+			wantColor: true,
+			wantIcon:  true,
+		},
+		{
+			name:      "auto pipe",
+			opt:       Options{IsTTY: tty(false)},
+			wantColor: false,
+			wantIcon:  false,
+		},
+		{
+			name:      "NO_COLOR=1 on a tty",
+			noColor:   "1",
+			opt:       Options{IsTTY: tty(true)},
+			wantColor: false,
+			wantIcon:  false,
+		},
+		{
+			name:      "NO_COLOR=0 is still set",
+			noColor:   "0",
+			opt:       Options{Color: ColorAlways, IsTTY: tty(true)},
+			wantColor: false,
+			wantIcon:  false,
+		},
+		{
+			name:      "empty NO_COLOR does not disable",
+			noColor:   "",
+			opt:       Options{IsTTY: tty(true)},
+			wantColor: true,
+			wantIcon:  true,
+		},
+		{
+			name:      "explicit unicode icons survive NO_COLOR",
+			noColor:   "1",
+			opt:       Options{Color: ColorAlways, Icons: IconUnicode, IsTTY: tty(true)},
+			wantColor: false,
+			wantIcon:  true,
+		},
+		{
+			name:      "explicit color never",
+			opt:       Options{Color: ColorNever, Icons: IconUnicode, IsTTY: tty(true)},
+			wantColor: false,
+			wantIcon:  true,
+		},
+		{
+			name:      "explicit color always off a tty",
+			opt:       Options{Color: ColorAlways, Icons: IconNone, IsTTY: tty(false)},
+			wantColor: true,
+			wantIcon:  false,
+		},
+		{
+			name:      "explicit nerd icons off a tty",
+			opt:       Options{Color: ColorNever, Icons: IconNerd, IsTTY: tty(false)},
+			wantColor: false,
+			wantIcon:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("NO_COLOR", tt.noColor)
+			got := renderAll(t, tt.opt, rows)
+			hasColor := strings.Contains(got, "\x1b")
+			if hasColor != tt.wantColor {
+				t.Errorf("color=%v, want %v: %q", hasColor, tt.wantColor, got)
+			}
+			hasIcon := strings.Contains(got, "⌘")
+			if tt.opt.Icons == IconNerd {
+				hasIcon = strings.Contains(got, "\uf121")
+			}
+			if hasIcon != tt.wantIcon {
+				t.Errorf("icon=%v, want %v: %q", hasIcon, tt.wantIcon, got)
+			}
+		})
+	}
+}
+
+func TestPrettyWidth(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	long := strings.Repeat("dir/", 20) + "readme.md"
+	cjk := strings.Repeat("照", 20) + ".png"
+	rows := []detect.Result{
+		{Seq: 0, Path: "go.mod", Description: "Verilog source", Label: "verilog", MimeType: "text/x-verilog", Group: "code", Score: 0.745, Source: detect.SourceModel, Size: 555},
+		{Seq: 1, Path: "照片.png", Description: "JPEG image", Label: "jpeg", MimeType: "image/jpeg", Group: "image", Score: 1, Source: detect.SourceMagic, Size: 2048},
+		{Seq: 2, Path: "cafe\u0301.txt", Description: "ASCII text", Label: "txt", MimeType: "text/plain", Group: "text", Score: 1, Source: detect.SourceMagic, Size: 3},
+		{Seq: 3, Path: long, Description: strings.Repeat("长", 20), Label: "txt", MimeType: strings.Repeat("m", 50), Group: "text", Score: 0.9, Source: detect.SourceModel, Size: 9},
+		{Seq: 4, Path: cjk, Description: "PNG image", Label: "png", MimeType: "image/png", Group: "image", Score: 0.9, Source: detect.SourceModel, Size: 9},
+		{Seq: 5, Path: "a\nb\x1b[31m", Description: "line\nbreak", Label: "x", MimeType: "text/plain", Group: "text", Score: 1, Source: detect.SourceName, Size: 1},
+	}
+	got := renderAll(t, Options{Color: ColorNever, Icons: IconNone}, rows)
+	if strings.Contains(got, "\x1b") {
+		t.Fatalf("escape leaked into a sanitized line:\n%s", got)
+	}
+	lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
+	if len(lines) != len(rows) {
+		t.Fatalf("got %d lines, want %d:\n%s", len(lines), len(rows), got)
+	}
+	for i, line := range lines {
+		if got := displayWidth(takeFixed(line, pathWidth)); got != pathWidth {
+			t.Errorf("line %d path width %d, want %d: %q", i, got, pathWidth, line)
+		}
+		rest := dropFixed(line, pathWidth)
+		if !strings.HasPrefix(rest, "  ") {
+			t.Errorf("line %d missing separator after path: %q", i, line)
+		}
+		desc := dropFixed(rest, 2)
+		if got := displayWidth(takeFixed(desc, descWidth)); got != descWidth {
+			t.Errorf("line %d description width %d, want %d: %q", i, got, descWidth, line)
+		}
+	}
+	if !strings.Contains(lines[1], "照片.png") {
+		t.Errorf("cjk path was altered: %q", lines[1])
+	}
+	if !strings.Contains(lines[2], "cafe\u0301.txt") {
+		t.Errorf("combining mark was altered: %q", lines[2])
+	}
+	if !strings.Contains(lines[3], "...") || !strings.Contains(lines[3], "readme.md") {
+		t.Errorf("long path should keep the file name: %q", lines[3])
+	}
+	if !strings.Contains(lines[4], "...") || !strings.Contains(lines[4], ".png") {
+		t.Errorf("long cjk path should keep the suffix: %q", lines[4])
+	}
+	if strings.Contains(lines[4], "照照照") && displayWidth(takeFixed(lines[4], pathWidth)) != pathWidth {
+		t.Errorf("cjk truncation split a column: %q", lines[4])
+	}
+	if strings.Contains(lines[5], "\n") || strings.Contains(got, "\x1b[31m") {
+		t.Errorf("control characters were not sanitized: %q", lines[5])
+	}
+	if !strings.Contains(lines[5], "a?b?[31m") {
+		t.Errorf("sanitized path: %q", lines[5])
+	}
+	// A wide description is truncated on a rune boundary and still fills the column.
+	if !strings.Contains(lines[3], "...") {
+		t.Errorf("wide description was not truncated: %q", lines[3])
+	}
+}
+
+func TestPrettyErrors(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	row := detect.Result{Seq: 0, Path: "missing.bin", Err: errors.New("stat missing.bin: no such file")}
+	ok := rowGoMod()
+	ok.Seq = 1
+
+	off := renderAll(t, Options{Color: ColorNever, Icons: IconNone}, []detect.Result{row, ok})
+	on := renderAll(t, Options{Color: ColorAlways, Icons: IconUnicode}, []detect.Result{row, ok})
+	if !strings.Contains(off, "missing.bin") || !strings.Contains(off, "error: stat missing.bin: no such file") {
+		t.Fatalf("error row: %q", off)
+	}
+	if strings.Contains(strings.Split(off, "\n")[0], "score=") {
+		t.Fatalf("error row should not look like a detection: %q", off)
+	}
+	if strings.Count(off, "\n") != 2 {
+		t.Fatalf("error and ok row: %q", off)
+	}
+	// The text prefix is present with color, and the message is red.
+	if !strings.Contains(on, "error: stat missing.bin: no such file") {
+		t.Fatalf("color error row dropped the prefix: %q", on)
+	}
+	if !strings.Contains(on, "\x1b[1;31merror:") {
+		t.Fatalf("error text is not red: %q", on)
+	}
+	if !strings.Contains(on, "✖") {
+		t.Fatalf("unicode error icon missing: %q", on)
+	}
+	nl := renderAll(t, Options{Color: ColorNever, Icons: IconNone}, []detect.Result{{
+		Seq: 0, Path: "bad", Err: errors.New("boom\nhere"),
+	}})
+	if strings.Contains(nl, "boom\nhere") || !strings.Contains(nl, "error: boom?here") {
+		t.Fatalf("error newline was not sanitized: %q", nl)
+	}
+	// Path columns of the error row and the following row match.
+	lines := strings.Split(strings.TrimSuffix(stripANSI(on), "\n"), "\n")
+	if widthBefore(lines[0], "missing.bin") != widthBefore(lines[1], "go.mod") {
+		t.Fatalf("error path column drifted:\n%s\n%s", lines[0], lines[1])
+	}
+}
+
+func TestPrettyOutOfOrder(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	a := rowGoMod()
+	b := rowLow()
+	c := rowJSON()
+	opt := Options{Color: ColorNever, Icons: IconNone}
+
+	var buf bytes.Buffer
+	p := NewPretty(&buf, opt)
+	if err := p.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Write(c); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("seq 2 emitted before seq 0: %q", buf.String())
+	}
+	if err := p.Write(a); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(buf.String(), "\n"); got != 1 || !strings.Contains(buf.String(), "go.mod") {
+		t.Fatalf("after seq 0: %q", buf.String())
+	}
+	if err := p.Write(b); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.End(); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	want := renderAll(t, opt, []detect.Result{a, b, c})
+	if got != want {
+		t.Errorf("out of order:\n got: %q\nwant: %q", got, want)
+	}
+
+	// A gap still flushes at End, in seq order.
+	buf.Reset()
+	if err := p.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	late := c
+	late.Seq = 4
+	mid := b
+	mid.Seq = 2
+	if err := p.Write(late); err != nil || buf.Len() != 0 {
+		t.Fatalf("gap write: %v %q", err, buf.String())
+	}
+	if err := p.Write(mid); err != nil || buf.Len() != 0 {
+		t.Fatalf("gap write: %v %q", err, buf.String())
+	}
+	if err := p.End(); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], "notes.txt") || !strings.Contains(lines[1], "data.json") {
+		t.Fatalf("gap flush: %q", buf.String())
+	}
+
+	if err := p.Write(a); err == nil {
+		t.Fatal("Write after End succeeded")
+	}
+	if err := p.End(); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewPretty(&buf, opt).End(); err == nil {
+		t.Fatal("End before Begin succeeded")
+	}
+}
+
+func TestPrettyConcurrentWrite(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	const n = 32
+	rows := make([]detect.Result, n)
+	for i := range rows {
+		rows[i] = detect.Result{
+			Seq: i, Path: "f", Description: "text", Label: "txt",
+			MimeType: "text/plain", Group: "text", Score: 1,
+			Source: detect.SourceModel, Size: int64(i),
+		}
+		rows[i].Path = strings.Repeat("n", i%5) + "/" + strings.Repeat("x", i)
+	}
+	var buf bytes.Buffer
+	p := NewPretty(&buf, Options{Color: ColorNever, Icons: IconNone})
+	if err := p.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for i := n - 1; i >= 0; i-- {
+		wg.Add(1)
+		go func(r detect.Result) {
+			defer wg.Done()
+			if err := p.Write(r); err != nil {
+				t.Errorf("write %d: %v", r.Seq, err)
+			}
+		}(rows[i])
+	}
+	wg.Wait()
+	if err := p.End(); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	want := renderAll(t, Options{Color: ColorNever, Icons: IconNone}, rows)
+	if got != want {
+		t.Fatalf("concurrent render drifted\n got bytes %d\nwant bytes %d", len(got), len(want))
+	}
+}
+
+func TestPrettyWriterError(t *testing.T) {
+	p := NewPretty(failWriter{}, Options{Color: ColorNever, Icons: IconNone})
+	if err := p.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	err := p.Write(rowGoMod())
+	if err == nil || !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("Write err: %v", err)
+	}
+	if err := p.End(); err == nil {
+		t.Fatal("End swallowed the writer error")
+	}
+	if err := NewPretty(nil, Options{}).Begin(); err == nil {
+		t.Fatal("nil writer Begin succeeded")
+	}
+}
+
+func TestPrettyStaleSeq(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	var buf bytes.Buffer
+	p := NewPretty(&buf, Options{Color: ColorNever, Icons: IconNone})
+	if err := p.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Write(rowGoMod()); err != nil {
+		t.Fatal(err)
+	}
+	stale := rowLow()
+	stale.Seq = 0
+	if err := p.Write(stale); err == nil {
+		t.Fatal("stale seq was accepted")
+	}
+}
+
+func TestPipeIsNotTerminal(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		r.Close()
+		w.Close()
+	})
+	if isTerminal(w) {
+		t.Fatal("pipe writer reported as a terminal")
+	}
+	if isTerminal(&bytes.Buffer{}) {
+		t.Fatal("bytes.Buffer reported as a terminal")
+	}
+}
+
+func TestLowConfidenceThreshold(t *testing.T) {
+	base := rowGoMod()
+	base.Score = 0.5
+	base.Source = detect.SourceModel
+	if lowConfidence(base) {
+		t.Fatal("score 0.5 should not be low")
+	}
+	base.Score = 0.5 - 1e-9
+	if !lowConfidence(base) {
+		t.Fatal("score just under 0.5 should be low")
+	}
+	base.Score = 0.99
+	base.Source = detect.SourceHeuristic
+	if !lowConfidence(base) {
+		t.Fatal("heuristic should be low at any score")
+	}
+}
+
+func rowGoMod() detect.Result {
+	return detect.Result{
+		Seq: 0, Path: "go.mod", Label: "verilog", Description: "Verilog source",
+		MimeType: "text/x-verilog", Group: "code", Score: 0.745,
+		Source: detect.SourceModel, Size: 555,
+	}
+}
+
+func rowLow() detect.Result {
+	return detect.Result{
+		Seq: 1, Path: "notes.txt", Label: "txt", Description: "ASCII text",
+		MimeType: "text/plain", Group: "text", Score: 0.25,
+		Source: detect.SourceHeuristic, Size: 12,
+	}
+}
+
+func rowJSON() detect.Result {
+	return detect.Result{
+		Seq: 2, Path: "data.json", Label: "json", Description: "JSON document",
+		MimeType: "application/json", Group: "code", Score: 0.91,
+		Source: detect.SourceModel, Size: 128,
+	}
+}
+
+func rowError() detect.Result {
+	return detect.Result{Seq: 3, Path: "missing.bin", Err: errors.New("no such file")}
+}
+
+func renderAll(t *testing.T, opt Options, rows []detect.Result) string {
+	t.Helper()
+	var buf bytes.Buffer
+	p := NewPretty(&buf, opt)
+	if err := p.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if err := p.Write(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := p.End(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.String()
+}
+
+func tty(v bool) *bool { return &v }
+
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }
+
+var ansiRE = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripANSI(s string) string { return ansiRE.ReplaceAllString(s, "") }
+
+func takeFixed(s string, width int) string {
+	p, _ := takePrefix(s, width)
+	return p
+}
+
+func dropFixed(s string, width int) string {
+	p, _ := takePrefix(s, width)
+	return strings.TrimPrefix(s, p)
+}
+
+func leadingWidth(s string) int { return displayWidth(takeFixed(s, 2)) }
+
+// widthBefore reports the display width of s before the first match.
+func widthBefore(s, needle string) int {
+	i := strings.Index(s, needle)
+	if i < 0 {
+		return -1
+	}
+	return displayWidth(s[:i])
+}
+
+// goldenOff is the color-off rendering of rowGoMod, rowLow, and rowError.
+const goldenOff = "go.mod                        Verilog source                code          score=0.745   size=555B       model      verilog           text/x-verilog\n" +
+	"notes.txt                     ASCII text                    text          score=0.250~  size=12B        heuristic  txt               text/plain  low\n" +
+	"missing.bin                   error: no such file\n"
+
+// goldenOn is the same rows with ColorAlways and IconsNone.
+const goldenOn = "\x1b[1mgo.mod                      \x1b[0m  \x1b[36mVerilog source              \x1b[0m  \x1b[36mcode        \x1b[0m  \x1b[2mscore=0.745 \x1b[0m  \x1b[2msize=555B     \x1b[0m  \x1b[2mmodel    \x1b[0m  \x1b[2mverilog         \x1b[0m  \x1b[2mtext/x-verilog\x1b[0m\n" +
+	"\x1b[1mnotes.txt                   \x1b[0m  \x1b[32mASCII text                  \x1b[0m  \x1b[32mtext        \x1b[0m  \x1b[2mscore=0.250~\x1b[0m  \x1b[2msize=12B      \x1b[0m  \x1b[2mheuristic\x1b[0m  \x1b[2mtxt             \x1b[0m  \x1b[2mtext/plain\x1b[0m  \x1b[1;4mlow\x1b[0m\n" +
+	"\x1b[1;31mmissing.bin                 \x1b[0m  \x1b[1;31merror: no such file\x1b[0m\n"
