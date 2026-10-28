@@ -1,0 +1,4 @@
+example.com/dep v1.2.3 h1:abcdefghijklmnopqrstuvwxyz0123456789ABCDEF=
+example.com/dep v1.2.3/go.mod h1:abcdefghijklmnopqrstuvwxyz0123456789ABCDEF=
+rsc.io/quote v1.5.2 h1:zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz=
+rsc.io/quote v1.5.2/go.mod h1:yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy=

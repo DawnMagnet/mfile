@@ -1,0 +1,14 @@
+:root {
+  --ink: #222;
+  --paper: #fff;
+}
+
+body {
+  color: var(--ink);
+  background: var(--paper);
+  font-family: sans-serif;
+}
+
+.sample > p {
+  margin: 0 0 1rem;
+}

@@ -1,0 +1,9 @@
+name: qa-sample
+enabled: true
+retries: 3
+tags:
+  - corpus
+  - mfile
+service:
+  host: localhost
+  port: 8080

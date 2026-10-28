@@ -1,0 +1,254 @@
+#!/usr/bin/env python3
+"""Model-equivalence and stability gate.
+
+Builds the accuracy test two ways and runs it under the combinations that
+have to agree:
+
+  (a) GOAMD64=v1
+  (b) GOEXPERIMENT=simd GOAMD64=v1
+  (c) the (b) binary with GODEBUG=simd=0
+
+Each process repeats the corpus five times at workers=1 batch=1, then again
+at other worker and batch sizes. (a) and (b) are also repeated with GOGC=1.
+
+The in-process test compares every round and compares dl labels and scores
+to magika (Python module, standard_v3_3). This wrapper then compares the
+canonical round across processes. Labels must match. Scores must be within
+1e-4.
+
+A supplemental sandy-like run also sets GOMLX_GO_SIMD_AVX2=0 and
+GOMLX_GO_SIMD_AVX512=0, because those switches (not GODEBUG) select gomlx's
+hand-written kernels. It is reported next to (c). On a CPU with AVX-512,
+(c) alone still uses those kernels.
+
+Exit status is 1 when the gate fails.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import common
+
+
+def canonical(payload: dict) -> list[dict]:
+    for round_ in payload["rounds"]:
+        if round_["workers"] == 1 and round_["batch"] == 1:
+            return round_["files"]
+    raise SystemExit("accuracy JSON has no workers=1 batch=1 round")
+
+
+def run_test(binary: Path, name: str, extra: dict[str, str], out_dir: Path) -> tuple[int, dict | None, str]:
+    out = out_dir / f"{name}.json"
+    env = common.runtime_env(extra)
+    env["MFILE_ACCURACY_OUT"] = str(out)
+    env["MFILE_ACCURACY_NAME"] = name
+    print(f"equiv run {name}", flush=True)
+    proc = subprocess.run(
+        [str(binary), "-test.v", "-test.count=1", "-test.timeout", "30m"],
+        cwd=common.repo_root(),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    log_path = out_dir / f"{name}.log"
+    log_path.write_text(proc.stdout, encoding="utf-8")
+    payload = None
+    if out.exists():
+        payload = json.loads(out.read_text(encoding="utf-8"))
+    if proc.returncode != 0:
+        tail = "\n".join(proc.stdout.splitlines()[-40:])
+        print(tail, file=sys.stderr)
+    return proc.returncode, payload, proc.stdout
+
+
+def compare_maps(left: list[dict], right: list[dict], tag: str) -> tuple[list[str], float]:
+    problems = []
+    max_delta = 0.0
+    by_path = {row["path"]: row for row in right}
+    for row in left:
+        other = by_path[row["path"]]
+        delta = abs(row["score"] - other["score"])
+        max_delta = max(max_delta, delta)
+        if row["label"] != other["label"] or common.norm_dl(row["dl"]) != common.norm_dl(other["dl"]) or delta > common.SCORE_TOL:
+            problems.append(
+                f"{tag} {row['path']}: {row['label']}/{row['dl']} {row['score']:.8g} vs "
+                f"{other['label']}/{other['dl']} {other['score']:.8g} (delta {delta:.3e})"
+            )
+    return problems, max_delta
+
+
+def patch_attribution(paths: list[Path]) -> str:
+    """ORT(original) vs ORT(patched) vs the public magika score."""
+    try:
+        import numpy as np
+        import onnxruntime as ort
+        from magika import Magika
+    except ImportError as exc:
+        return f"patch attribution skipped: {exc}"
+    magika = Magika()
+    if magika.get_model_name() != common.MODEL_NAME:
+        return f"patch attribution skipped: model {magika.get_model_name()}"
+    root = common.repo_root()
+    cfg = json.loads((root / "assets" / "standard_v3_3" / "config.min.json").read_text(encoding="utf-8"))
+    labels = cfg["target_labels_space"]
+    rows = []
+    used = []
+    for path in paths:
+        _result, feat = magika._get_result_or_features_from_path(Path(path))
+        if feat is None:
+            continue
+        sample: list[int] = []
+        if cfg["beg_size"]:
+            sample.extend(feat.beg[: cfg["beg_size"]])
+        if cfg["mid_size"]:
+            sample.extend(feat.mid[: cfg["mid_size"]])
+        if cfg["end_size"]:
+            sample.extend(feat.end[-cfg["end_size"] :])
+        rows.append(sample)
+        used.append(path)
+    if not rows:
+        return "patch attribution: no file reached the model"
+    providers = ["CPUExecutionProvider"]
+    original = ort.InferenceSession(str(root / "assets" / "standard_v3_3" / "model.onnx"), providers=providers)
+    patched = ort.InferenceSession(str(root / "assets" / "standard_v3_3" / "model.patched.onnx"), providers=providers)
+
+    def predict(session):
+        output = session.get_outputs()[0].name
+        return session.run([output], {"bytes": rows})[0]
+
+    ref = np.asarray(predict(original), dtype=np.float64)
+    got = np.asarray(predict(patched), dtype=np.float64)
+    vector_delta = float(np.max(np.abs(ref - got)))
+    ref_idx = ref.argmax(axis=1)
+    got_idx = got.argmax(axis=1)
+    label_mismatch = int(np.sum(ref_idx != got_idx))
+    top_delta = float(np.max(np.abs(ref[np.arange(len(ref)), ref_idx] - got[np.arange(len(got)), ref_idx])))
+    return (
+        f"ORT original vs ORT patched on {len(rows)} model inputs: "
+        f"max |vector| {vector_delta:.3e}, max |top1 score| {top_delta:.3e}, "
+        f"argmax mismatches {label_mismatch}. "
+        f"A near-zero patched-vs-original gap means a later mfile-vs-magika gap is Go float32, "
+        f"not the rewrite in tools/patch_model.py."
+    )
+
+
+def checkptr_probe(paths: list[Path], reference: dict[str, dict]) -> str:
+    dest = common.qa_root() / "bin" / "mfile-checkptr"
+    env = common.go_build_env(simd=False)
+    print("building checkptr probe", flush=True)
+    build = subprocess.run(
+        ["go", "build", "-trimpath", "-gcflags=all=-d=checkptr", "-o", str(dest), "./cmd/mfile"],
+        cwd=common.repo_root(),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    if build.returncode != 0:
+        return "checkptr build failed:\n" + build.stdout[-2000:]
+    results, stderr, rc = common.run_mfile(dest, paths, extra_env={"GODEBUG": "checkptr=2"})
+    if rc != 0 or len(results) != len(paths):
+        tail = "\n".join(stderr.splitlines()[-30:])
+        return f"checkptr run exited {rc} with {len(results)} results.\n{tail}"
+    problems = []
+    for path in paths:
+        key = str(path)
+        got = results[key]
+        ref = reference[key]
+        delta = abs(got["score"] - ref["score"])
+        if got["label"] != ref["label"] or common.norm_dl(got["dl"]) != common.norm_dl(ref["dl"]) or delta > common.SCORE_TOL:
+            problems.append(f"{path}: {got['label']} {got['score']:.8g} vs {ref['label']} {ref['score']:.8g}")
+    if problems:
+        return "checkptr results differ from v1:\n" + "\n".join(problems[:30])
+    return f"checkptr probe matched v1 on {len(paths)} files (GODEBUG=checkptr=2)."
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--rebuild", action="store_true")
+    parser.add_argument("--skip-checkptr", action="store_true")
+    args = parser.parse_args()
+    out_dir = common.qa_root() / "equiv"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    bindir = common.qa_root() / "bin"
+    v1 = bindir / "accuracy-v1.test"
+    simd = bindir / "accuracy-simd.test"
+    common.build_accuracy_test(v1, simd=False, rebuild=args.rebuild)
+    common.build_accuracy_test(simd, simd=True, rebuild=args.rebuild)
+
+    plan = [
+        ("v1", v1, {}),
+        ("v1-gogc1", v1, {"GOGC": "1"}),
+        ("simd", simd, {}),
+        ("simd-gogc1", simd, {"GOGC": "1"}),
+        ("simd-off", simd, dict(common.SIMD_OFF)),
+        ("simd-off-gogc1", simd, {**common.SIMD_OFF, "GOGC": "1"}),
+        ("sandy-like", simd, dict(common.SANDY_LIKE)),
+    ]
+    payloads = {}
+    failed = False
+    for name, binary, extra in plan:
+        rc, payload, _log = run_test(binary, name, extra, out_dir)
+        payloads[name] = payload
+        if rc != 0 or payload is None:
+            print(f"FAIL {name}: exit {rc}", file=sys.stderr)
+            failed = True
+
+    print()
+    if "v1" not in payloads or payloads["v1"] is None:
+        print("no v1 payload; gate failed")
+        return 1
+    base = canonical(payloads["v1"])
+    print(f"canonical files {len(base)}")
+    print(f"v1 magika_max_delta {payloads['v1'].get('magika_max_delta')}")
+    print(f"v1 bit_diffs {len(payloads['v1'].get('bit_diffs') or [])}")
+    for name, _binary, _extra in plan:
+        payload = payloads.get(name)
+        if not payload:
+            continue
+        problems, max_delta = compare_maps(base, canonical(payload), name)
+        bits = len(payload.get("bit_diffs") or [])
+        print(
+            f"{name}: vs v1 max_delta={max_delta:.3e} problems={len(problems)} "
+            f"internal_bit_diffs={bits} magika_max_delta={payload.get('magika_max_delta')}"
+        )
+        for line in problems[:20]:
+            print(" ", line)
+        if problems:
+            failed = True
+        # Internal bit diffs are reported. The test already failed the process
+        # when a diff exceeded the tolerance.
+
+    corpus = common.corpus_dir()
+    paths = common.iter_samples(corpus)
+    print()
+    print(patch_attribution(paths))
+
+    if not args.skip_checkptr:
+        print()
+        v1_bin, _simd_bin = common.ensure_clis(rebuild=args.rebuild)
+        reference, _stderr, rc = common.run_mfile(v1_bin, paths)
+        if rc != 0:
+            print("v1 CLI failed; skipping checkptr compare", file=sys.stderr)
+            failed = True
+        else:
+            message = checkptr_probe(paths, reference)
+            print(message)
+            if not message.startswith("checkptr probe matched"):
+                failed = True
+
+    print()
+    print("GATE", "FAIL" if failed else "PASS")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
