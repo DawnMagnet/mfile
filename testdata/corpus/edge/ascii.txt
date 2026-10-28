@@ -1,0 +1,2 @@
+This is a plain ASCII paragraph for the edge corpus.
+It has several lines and no markup.

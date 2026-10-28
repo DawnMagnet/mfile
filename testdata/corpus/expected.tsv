@@ -1,0 +1,81 @@
+path	label	mime	file_substr	known_fail	notes
+binary/hello.elf	elf	application/x-executable-elf	ELF	0	compiled by this script with gcc -static -nostdlib -Wl,--build-id=none
+binary/hello.exe	pebin	application/x-dosexec	PE32	0	
+binary/hello.macho	macho	application/x-mach-o	Mach-O	0	
+binary/pixel.gif	gif	image/gif	GIF	0	
+binary/pixel.jpg	jpeg	image/jpeg	JPEG	0	
+binary/pixel.png	png	image/png	PNG	0	
+binary/sample.7z	sevenzip	application/x-7z-compressed	7-zip	0	
+binary/sample.bz2	bzip	application/x-bzip2	bzip2	0	
+binary/sample.doc	doc	application/msword	Composite Document File	0	synthetic OLE with a WordDocument FIB
+binary/sample.docx	docx	application/vnd.openxmlformats-officedocument.wordprocessingml.document	Microsoft Word	0	
+binary/sample.gz	gzip	application/gzip	gzip	0	
+binary/sample.jar	jar	application/java-archive	Java archive	0	JAR with a manifest and a class file
+binary/sample.pdf	pdf	application/pdf	PDF	0	
+binary/sample.sqlite	sqlite	application/vnd.sqlite3	SQLite	0	KB mime_type is null; expected MIME is application/vnd.sqlite3
+binary/sample.tar	tar	application/x-tar	tar	0	
+binary/sample.wasm	wasm	application/wasm	WebAssembly	0	
+binary/sample.xlsx	xlsx	application/vnd.openxmlformats-officedocument.spreadsheetml.sheet	Microsoft Excel	0	
+binary/sample.xz	xz	application/x-xz	XZ	0	
+binary/sample.zip	zip	application/zip	Zip	0	
+byname/.gitignore	ignorefile	text/plain	ASCII	0	
+byname/CMakeLists.txt	cmake	text/x-cmake	CMake	0	
+byname/Cargo.lock	toml	application/toml	ASCII	0	Cargo.lock is TOML; identification does not use the file name
+byname/Dockerfile	dockerfile	text/x-dockerfile	Dockerfile	0	
+byname/Makefile	makefile	text/x-makefile	makefile	0	
+byname/PKGBUILD	shell	text/x-shellscript	shell	0	PKGBUILD is shell; no shebang, name is the usual signal
+byname/flake.lock	json	application/json	JSON	0	flake.lock is JSON
+byname/go.mod	txt	text/plain	ASCII	1	known-fail: model labels this verilog at about 0.745; filename layer is item 5
+byname/go.sum	sum	text/plain	ASCII	0	checksum file; KB mime_type is null so mfile emits an empty MIME
+byname/go.work	txt	text/plain	ASCII	0	no go.work label in the Magika vocabulary
+code/Hello.hs	haskell	text/plain	Haskell	0	
+code/Hello.java	java	text/x-java	Java	0	
+code/hello.c	c	text/x-c	C source	0	C source with stdio and a struct, no C++ tokens
+code/hello.cpp	cpp	text/x-c	C++	0	C++ source using iostream and a class
+code/hello.cs	cs	text/plain	C#	0	
+code/hello.go	go	text/x-golang	Go	0	Go source; distinct from the go.mod fixture
+code/hello.js	javascript	application/javascript	JavaScript	0	
+code/hello.kt	kotlin	text/plain	Kotlin	0	
+code/hello.lua	lua	text/plain	Lua	0	
+code/hello.php	php	text/x-php	PHP	0	
+code/hello.pl	perl	text/x-perl	Perl	0	
+code/hello.py	python	text/x-python	Python	0	Python with a shebang
+code/hello.rb	ruby	application/x-ruby	Ruby	0	
+code/hello.rs	rust	application/x-rust	Rust	0	
+code/hello.scala	scala	application/x-scala	Scala	0	
+code/hello.swift	swift	text/x-swift	Swift	0	
+code/hello.ts	typescript	application/typescript	TypeScript	0	
+code/hello.zig	zig	text/zig	Zig	0	
+code/hello_noshebang.py	python	text/x-python	Python	0	Python without a shebang
+code/no_shebang.sh	shell	text/x-shellscript	shell	0	shell script without a shebang
+code/page.html	html	text/html	HTML	0	
+code/query.sql	sql	application/x-sql	SQL	0	
+code/style.css	css	text/css	CSS	0	
+code/with_shebang.sh	shell	text/x-shellscript	shell	0	shell script with a shebang
+config/app.ini	ini	text/plain	INI	0	
+config/app.json	json	application/json	JSON	0	
+config/app.toml	toml	application/toml	TOML	0	
+config/app.xml	xml	text/xml	XML	0	
+config/app.yaml	yaml	application/x-yaml	YAML	0	
+config/data.csv	csv	text/csv	CSV	0	
+config/data.tsv	tsv	text/tab-separated-values	TSV	0	repo KB mime is text/tab-separated-values; magika 1.0.3 KB says text/tsv
+edge/ascii.txt	txt	text/plain	ASCII	0	plain ASCII
+edge/bom_only.txt	txt	text/plain	UTF-8	0	BOM alone is shorter than min_file_size_for_dl
+edge/empty	empty	inode/x-empty	empty	0	zero-length file
+edge/latin1.txt	txt	text/plain	ISO-8859	0	ISO-8859-1 text, not valid UTF-8
+edge/long_line.txt	txt	text/plain	ASCII	0	one line longer than 100KB
+edge/one_byte.txt	txt	text/plain	very short file	0	one ASCII byte; below min_file_size_for_dl
+edge/one_ff.bin	unknown	application/octet-stream	very short file	0	single non-UTF-8 byte; short-file rule yields unknown
+edge/one_nul.bin	txt	text/plain	very short file	0	NUL is valid UTF-8, so the short-file rule yields txt
+edge/random.bin	unknown	application/octet-stream	data	0	deterministic pseudo-random bytes
+edge/utf16be.txt	txt	text/plain	UTF-16	0	UTF-16 BE with BOM
+edge/utf16le.txt	txt	text/plain	UTF-16	0	UTF-16 LE with BOM
+edge/utf8.txt	txt	text/plain	UTF-8	0	UTF-8 without BOM
+edge/utf8_bom.txt	txt	text/plain	UTF-8	0	UTF-8 with BOM
+edge/whitespace.txt	txt	text/plain	ASCII	0	only whitespace; the model is not run
+mismatch/README	python	text/x-python	Python	0	no extension; body is Python
+mismatch/blob	gzip	application/gzip	gzip	0	no extension; body is gzip
+mismatch/notes.txt	png	image/png	PNG	0	extension says txt; body is a PNG
+mismatch/photo.png	json	application/json	JSON	0	extension says png; body is JSON
+text/plain.txt	txt	text/plain	ASCII	0	plain ASCII prose
+text/readme.md	markdown	text/markdown	Markdown	0	

@@ -1,0 +1,6 @@
+# Pinned for scripts/bench. The wheel also installs the magika 1.1.0 CLI,
+# which reports `magika 1.1.0 standard_v3_3`. Score checks use the Python
+# module (full precision); the CLI --json score is truncated to 3 decimals.
+magika==1.0.3
+# Only gen_corpus.py needs py7zr (synthetic 7z sample).
+py7zr==1.1.4

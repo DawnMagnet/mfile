@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <name>qa-sample</name>
+  <enabled>true</enabled>
+  <port>8080</port>
+</config>

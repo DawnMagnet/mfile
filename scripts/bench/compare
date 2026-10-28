@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""Compare mfile, file(1), and magika on testdata/corpus.
+
+mfile is built three ways and run once each:
+  (a) GOAMD64=v1
+  (b) GOEXPERIMENT=simd GOAMD64=v1
+  (c) the (b) binary with GODEBUG=simd=0
+
+Accuracy is against testdata/corpus/expected.tsv. Exit status is 1 when the
+three mfile runs disagree on a label or by more than scripts/bench/gate.json
+score_tol in score. Accuracy
+below 100% does not by itself fail the process: go.mod is a known failure.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import common
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--corpus", type=Path, default=common.corpus_dir())
+    parser.add_argument("--rebuild", action="store_true")
+    parser.add_argument("--tsv", type=Path, default=common.qa_root() / "compare.tsv")
+    args = parser.parse_args()
+    corpus = args.corpus
+    expected = common.load_expected(corpus / "expected.tsv")
+    paths = common.iter_samples(corpus)
+    missing = [common.rel_of(corpus, p) for p in paths if common.rel_of(corpus, p) not in expected]
+    extra = sorted(set(expected) - {common.rel_of(corpus, p) for p in paths})
+    if missing or extra:
+        raise SystemExit(f"expected.tsv does not match the corpus (missing {missing[:5]}, extra {extra[:5]})")
+
+    v1_bin, simd_bin = common.ensure_clis(rebuild=args.rebuild)
+    modes = [
+        ("v1", v1_bin, None),
+        ("simd", simd_bin, None),
+        ("simd_off", simd_bin, common.SIMD_OFF),
+    ]
+    mfile = {}
+    for name, binary, env in modes:
+        print(f"running mfile {name}", flush=True)
+        results, stderr, rc = common.run_mfile(binary, paths, extra_env=env)
+        if rc != 0:
+            print(stderr, file=sys.stderr)
+            raise SystemExit(f"mfile {name} exited {rc}")
+        mfile[name] = results
+
+    print("running file and magika", flush=True)
+    file_info = common.run_file(paths)
+    magika, meta = common.magika_python(paths)
+    cli = common.magika_cli_labels(paths)
+    cli_label_mismatch = []
+    for path in paths:
+        key = str(path)
+        if cli[key]["label"] != magika[key]["label"]:
+            cli_label_mismatch.append((common.rel_of(corpus, path), cli[key]["label"], magika[key]["label"]))
+
+    names = ("v1", "simd", "simd_off")
+    agree_labels = 0
+    max_delta = 0.0
+    max_where = ""
+    label_mismatch = []
+    score_mismatch = []
+    per_tool_label = {n: 0 for n in (*names, "magika", "file")}
+    per_tool_mime = {n: 0 for n in (*names, "magika", "file")}
+    per_tool_label_unk = {n: 0 for n in (*names, "magika", "file")}
+    magika_agree = 0
+    known = 0
+    mismatches = []
+    tsv_lines = [
+        "path\texpected\texpected_mime\tknown_fail\t"
+        "v1\tv1_score\tv1_dl\tv1_mime\t"
+        "simd\tsimd_score\tsimd_off\tsimd_off_score\t"
+        "magika\tmagika_score\tmagika_dl\tmagika_mime\t"
+        "file_descr\tfile_mime"
+    ]
+
+    for path in paths:
+        rel = common.rel_of(corpus, path)
+        exp = expected[rel]
+        key = str(path)
+        rows = {name: mfile[name][key] for name in names}
+        mg = magika[key]
+        fl = file_info[key]
+        labels = [rows[name]["label"] for name in names]
+        if len(set(labels)) == 1:
+            agree_labels += 1
+        else:
+            label_mismatch.append((rel, labels))
+        gaps = {
+            "v1/simd": abs(rows["v1"]["score"] - rows["simd"]["score"]),
+            "v1/simd_off": abs(rows["v1"]["score"] - rows["simd_off"]["score"]),
+            "simd/simd_off": abs(rows["simd"]["score"] - rows["simd_off"]["score"]),
+        }
+        gap_name, gap = max(gaps.items(), key=lambda item: item[1])
+        if gap > max_delta:
+            max_delta = gap
+            max_where = f"{rel} {gap_name}"
+        if gap > common.SCORE_TOL:
+            score_mismatch.append((rel, gap_name, gap, rows["v1"]["score"], rows["simd"]["score"], rows["simd_off"]["score"]))
+        is_known = exp.get("known_fail") == "1"
+        if is_known:
+            known += 1
+        if rows["v1"]["label"] == mg["label"]:
+            magika_agree += 1
+        for name in names:
+            row = rows[name]
+            if row["label"] == exp["label"]:
+                per_tool_label[name] += 1
+            elif name == "v1":
+                mismatches.append((rel, exp, row, mg))
+            if row["mime"] == exp["mime"]:
+                per_tool_mime[name] += 1
+        if mg["label"] == exp["label"]:
+            per_tool_label["magika"] += 1
+        if mg["mime"] == exp["mime"]:
+            per_tool_mime["magika"] += 1
+        substr = exp.get("file_substr") or ""
+        if substr:
+            per_tool_label_unk["file"] += 1
+            if substr in fl["descr"]:
+                per_tool_label["file"] += 1
+        if exp["mime"]:
+            if fl["mime"] == exp["mime"]:
+                per_tool_mime["file"] += 1
+        tsv_lines.append(
+            "\t".join(
+                [
+                    rel,
+                    exp["label"],
+                    exp["mime"],
+                    exp.get("known_fail", "0"),
+                    rows["v1"]["label"],
+                    f"{rows['v1']['score']:.8g}",
+                    rows["v1"]["dl"],
+                    rows["v1"]["mime"],
+                    rows["simd"]["label"],
+                    f"{rows['simd']['score']:.8g}",
+                    rows["simd_off"]["label"],
+                    f"{rows['simd_off']['score']:.8g}",
+                    mg["label"],
+                    f"{mg['score']:.8g}",
+                    mg["dl"],
+                    mg["mime"],
+                    fl["descr"].replace("\t", " "),
+                    fl["mime"],
+                ]
+            )
+        )
+
+    n = len(paths)
+    file_label_den = per_tool_label_unk["file"]
+    print()
+    print(f"magika module {meta['module']} model {meta['model']}")
+    print(f"samples {n}  known_fail {known}")
+    print()
+    print("| tool | label accuracy | MIME accuracy |")
+    print("|---|---:|---:|")
+    pretty = {
+        "v1": "mfile GOAMD64=v1",
+        "simd": "mfile simd GOAMD64=v1",
+        "simd_off": "mfile simd + GODEBUG=simd=0",
+        "magika": f"magika {meta['module']} ({meta['model']})",
+        "file": "file(1)",
+    }
+    for name in (*names, "magika", "file"):
+        den = file_label_den if name == "file" else n
+        print(f"| {pretty[name]} | {common.pct(per_tool_label[name], den)} | {common.pct(per_tool_mime[name], n)} |")
+    print()
+    print(f"mfile v1 vs magika output-label agreement: {common.pct(magika_agree, n)}")
+    print(f"three mfile builds, identical output labels: {common.pct(agree_labels, n)}")
+    print(f"max |score| across the three builds: {max_delta:.3e} ({max_where})")
+    if cli_label_mismatch:
+        print(f"magika CLI vs Python output-label mismatches: {len(cli_label_mismatch)}")
+        for row in cli_label_mismatch[:10]:
+            print(" ", row)
+    print()
+    print("mfile v1 mismatches vs expected (label, score, dl, mime):")
+    if not mismatches:
+        print("  none")
+    for rel, exp, row, mg in mismatches:
+        known_mark = " known-fail" if exp.get("known_fail") == "1" else ""
+        print(
+            f"  {rel}: got {row['label']} score={row['score']:.6f} dl={row['dl'] or '-'} "
+            f"mime={row['mime'] or '-'} expected {exp['label']}{known_mark}"
+        )
+        print(f"    magika {mg['label']} score={mg['score']:.6f} dl={mg['dl']}  note: {exp.get('notes', '')}")
+    args.tsv.parent.mkdir(parents=True, exist_ok=True)
+    args.tsv.write_text("\n".join(tsv_lines) + "\n", encoding="utf-8")
+    print(f"\nper-file table: {args.tsv}")
+
+    failed = bool(label_mismatch) or bool(score_mismatch)
+    if label_mismatch:
+        print("\nbuild label mismatches:", file=sys.stderr)
+        for rel, labels in label_mismatch:
+            print(f"  {rel}: {labels}", file=sys.stderr)
+    if score_mismatch:
+        print(f"\nbuild score gaps above {common.SCORE_TOL:g}:", file=sys.stderr)
+        for rel, pair, gap, v1s, simds, offs in score_mismatch:
+            print(
+                f"  {rel} {pair} delta={gap:.3e} v1={v1s:.8g} simd={simds:.8g} simd_off={offs:.8g}",
+                file=sys.stderr,
+            )
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
