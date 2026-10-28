@@ -1,0 +1,8 @@
+mfile
+Copyright 2026 Dominic Wen
+
+This product embeds the Magika standard_v3_3 model, configuration and
+content types knowledge base from https://github.com/google/magika,
+Copyright Google LLC, licensed under the Apache License, Version 2.0.
+assets/standard_v3_3/model.patched.onnx is a modified version of the
+original model.onnx (see README.md, "Model patch").
