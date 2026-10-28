@@ -107,7 +107,7 @@ func TestFitLayout(t *testing.T) {
 	}
 }
 
-func TestHumanSize(t *testing.T) {
+func TestSizeUnits(t *testing.T) {
 	tests := []struct {
 		n    int64
 		want string
