@@ -70,6 +70,43 @@ func TestFitPreservesWidth(t *testing.T) {
 	}
 }
 
+func TestFitLayout(t *testing.T) {
+	full := fullLayout().lineWidth(false)
+	if full != 170 {
+		t.Fatalf("full layout width %d, want 170", full)
+	}
+	if got := fullLayout().lineWidth(true); got != full+iconCols {
+		t.Fatalf("icon layout width %d, want %d", got, full+iconCols)
+	}
+	tests := []struct {
+		width                     int
+		icons                     bool
+		path                      int
+		size, source, label, mime bool
+	}{
+		{width: 200, path: 28, size: true, source: true, label: true, mime: true},
+		{width: 170, path: 28, size: true, source: true, label: true, mime: true},
+		{width: 169, path: 27, size: true, source: true, label: true, mime: true},
+		{width: 120, path: 19, size: true, source: true},
+		{width: 100, path: 16, size: true},
+		{width: 80, path: 16},
+		{width: 120, icons: true, path: 19, size: true, source: true},
+		{width: 100, icons: true, path: 16, size: true},
+		{width: 80, icons: true, path: 15},
+	}
+	for _, tt := range tests {
+		got := fitLayout(tt.width, tt.icons)
+		if got.pathW != tt.path || got.showSize != tt.size || got.showSource != tt.source || got.showLabel != tt.label || got.showMIME != tt.mime {
+			t.Errorf("width %d icons %v: path %d size %v source %v label %v mime %v, want path %d size %v source %v label %v mime %v",
+				tt.width, tt.icons, got.pathW, got.showSize, got.showSource, got.showLabel, got.showMIME,
+				tt.path, tt.size, tt.source, tt.label, tt.mime)
+		}
+		if w := got.lineWidth(tt.icons); w > tt.width {
+			t.Errorf("width %d icons %v: layout is %d cells", tt.width, tt.icons, w)
+		}
+	}
+}
+
 func TestHumanSize(t *testing.T) {
 	tests := []struct {
 		n    int64
@@ -99,10 +136,10 @@ func TestScoreFieldWidth(t *testing.T) {
 	if low != "score=0.250~" {
 		t.Errorf("low score %q", low)
 	}
-	if displayWidth(plain) != displayWidth(low) {
-		t.Errorf("score fields differ: %q %q", plain, low)
+	if displayWidth(plain) != scoreWidth || displayWidth(low) != scoreWidth {
+		t.Errorf("score fields differ from budget %d: %q %q", scoreWidth, plain, low)
 	}
-	if sizeField(555) != "size=555B     " {
-		t.Errorf("size field %q", sizeField(555))
+	if got := sizeField(555); got != "size=555B     " || displayWidth(got) != sizeWidth {
+		t.Errorf("size field %q width %d, budget %d", got, displayWidth(got), sizeWidth)
 	}
 }

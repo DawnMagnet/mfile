@@ -13,16 +13,20 @@ import (
 
 // Pretty prints one aligned line per detection result.
 //
-// Columns are padded to a fixed display width so rows line up while results
-// still stream out of Write. Paths wider than the column are middle-truncated
-// on rune boundaries, which keeps the file name. CJK and other wide runes
-// count as two cells. Color uses the 16 ANSI colors and is omitted when
-// stdout is not a terminal or NO_COLOR is set to a non-empty value. Icons
-// default to unicode on a terminal and to none otherwise.
+// Columns are padded to a display width chosen in Begin so rows line up
+// while results still stream out of Write. A pipe keeps the full layout.
+// A terminal narrows it to GetSize (or Options.Columns): the path budget
+// shrinks first, then the label, MIME, source, and size columns drop, in
+// that order. Path, description, group, score, the low-confidence marker,
+// and error text stay. Paths wider than the column are middle-truncated on
+// rune boundaries, which keeps the file name. CJK and other wide runes count
+// as two cells. Color uses the 16 ANSI colors and is omitted when stdout is
+// not a terminal or NO_COLOR is set to a non-empty value. Icons default to
+// unicode on a terminal and to none otherwise.
 //
 // Write is safe for concurrent use. Begin and End should bracket the writes:
 // call Begin, then Write any number of results, then End. End flushes results
-// that never became contiguous, in Seq order.
+// that never became contiguous, in Index order.
 type Pretty struct {
 	w   io.Writer
 	opt Options
@@ -32,6 +36,7 @@ type Pretty struct {
 	ended bool
 	color bool
 	icons iconSet
+	lay   layout
 
 	next int
 	buf  map[int]detect.Result
@@ -54,6 +59,7 @@ func (p *Pretty) Begin() error {
 	color, icons := resolveAppearance(p.w, p.opt)
 	p.color = color
 	p.icons = icons
+	p.lay = resolveLayout(p.w, p.opt, icons != iconsNone)
 	p.next = 0
 	p.buf = make(map[int]detect.Result)
 	p.begun = true
@@ -61,24 +67,24 @@ func (p *Pretty) Begin() error {
 	return nil
 }
 
-// Write buffers r until every lower Seq has been seen, then writes those
-// lines. A Seq that was already emitted returns an error. Writing a Seq that
-// is still buffered replaces it, so a failed emit can be retried.
+// Write buffers r until every lower Index has been seen, then writes those
+// lines. An Index that was already emitted returns an error. Writing an
+// Index that is still buffered replaces it, so a failed emit can be retried.
 func (p *Pretty) Write(r detect.Result) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if !p.begun {
 		return errors.New("render: Write before Begin or after End")
 	}
-	if r.Seq < p.next {
-		return fmt.Errorf("render: duplicate or stale seq %d", r.Seq)
+	if r.Index < p.next {
+		return fmt.Errorf("render: duplicate or stale index %d", r.Index)
 	}
-	// Overwrite a seq that is still buffered so a failed emit can be retried.
-	p.buf[r.Seq] = r
+	// Overwrite an index that is still buffered so a failed emit can be retried.
+	p.buf[r.Index] = r
 	return p.flushReady()
 }
 
-// End writes any results still buffered, in Seq order, including gaps.
+// End writes any results still buffered, in Index order, including gaps.
 // A second End is a no-op.
 func (p *Pretty) End() error {
 	p.mu.Lock()
@@ -133,24 +139,28 @@ func (p *Pretty) emit(r detect.Result) error {
 
 func (p *Pretty) format(r detect.Result) string {
 	var b strings.Builder
-	failed := r.Err != nil
+	failed := r.Error != ""
 	if p.icons != iconsNone {
 		glyph, sgr := iconGlyph(p.icons, r.Label, r.Group, failed)
 		b.WriteString(paint(p.color, sgr, glyph))
 		b.WriteByte(' ')
 	}
 
-	path := fitMiddle(sanitize(r.Path), pathWidth)
+	path := fitMiddle(sanitize(r.Path), p.lay.pathW)
 	pathSGR := sgrBold
 	if failed {
 		pathSGR = sgrErr
 	}
 	b.WriteString(paint(p.color, pathSGR, path))
-	b.WriteString("  ")
+	b.WriteString(colSep)
 
 	if failed {
-		msg := "error: " + sanitize(r.Err.Error())
-		b.WriteString(paint(p.color, sgrErr, msg))
+		b.WriteString(paint(p.color, sgrErr, p.fitError(r.Error)))
+		b.WriteByte('\n')
+		return b.String()
+	}
+	if !r.Classified {
+		b.WriteString(unclassified(r))
 		b.WriteByte('\n')
 		return b.String()
 	}
@@ -158,28 +168,66 @@ func (p *Pretty) format(r detect.Result) string {
 	sgr := groupSGR[r.Group]
 	desc := fitEnd(sanitize(r.Description), descWidth)
 	b.WriteString(paint(p.color, sgr, desc))
-	b.WriteString("  ")
+	b.WriteString(colSep)
 	b.WriteString(paint(p.color, sgr, fitEnd(sanitize(r.Group), groupWidth)))
-	b.WriteString("  ")
+	b.WriteString(colSep)
 
 	low := lowConfidence(r)
 	b.WriteString(paint(p.color, sgrDim, scoreField(r.Score, low)))
-	b.WriteString("  ")
-	b.WriteString(paint(p.color, sgrDim, sizeField(r.Size)))
-	b.WriteString("  ")
-	b.WriteString(paint(p.color, sgrDim, fitEnd(sanitize(string(r.Source)), sourceWidth)))
-	b.WriteString("  ")
-	b.WriteString(paint(p.color, sgrDim, fitEnd(sanitize(r.Label), labelWidth)))
-	b.WriteString("  ")
-	// MIME is the last data column: truncate it, but do not pad it, so a
-	// short type does not leave trailing spaces. "low" follows when needed.
-	b.WriteString(paint(p.color, sgrDim, truncEnd(sanitize(r.MimeType), mimeWidth)))
+	if p.lay.showSize {
+		b.WriteString(colSep)
+		b.WriteString(paint(p.color, sgrDim, sizeField(r.Size)))
+	}
+	if p.lay.showSource {
+		b.WriteString(colSep)
+		b.WriteString(paint(p.color, sgrDim, fitEnd(sanitize(r.Source), sourceWidth)))
+	}
+	if p.lay.showLabel {
+		b.WriteString(colSep)
+		b.WriteString(paint(p.color, sgrDim, fitEnd(sanitize(r.Label), labelWidth)))
+	}
+	if p.lay.showMIME {
+		b.WriteString(colSep)
+		// MIME is not padded, so a short type does not leave trailing spaces.
+		b.WriteString(paint(p.color, sgrDim, truncEnd(sanitize(r.MIME), mimeWidth)))
+	}
 	if low {
-		b.WriteString("  ")
-		b.WriteString(paint(p.color, sgrLow, "low"))
+		b.WriteString(colSep)
+		b.WriteString(paint(p.color, sgrLow, lowText))
 	}
 	b.WriteByte('\n')
 	return b.String()
+}
+
+// fitError keeps the "error:" prefix. On a TTY the message is clipped so
+// the row stays within the terminal width; the prefix is never removed.
+func (p *Pretty) fitError(msg string) string {
+	const prefix = "error: "
+	msg = sanitize(msg)
+	if p.lay.cols <= 0 {
+		return prefix + msg
+	}
+	used := p.lay.pathW + len(colSep)
+	if p.icons != iconsNone {
+		used += iconCols
+	}
+	remain := p.lay.cols - used
+	prefixW := displayWidth(prefix)
+	if remain <= prefixW {
+		return prefix + msg
+	}
+	return prefix + truncEnd(msg, remain-prefixW)
+}
+
+func unclassified(r detect.Result) string {
+	switch {
+	case r.Target != "":
+		return "symbolic link to " + sanitize(r.Target)
+	case r.Kind != "":
+		return sanitize(r.Kind)
+	default:
+		return "unclassified"
+	}
 }
 
 var _ Renderer = (*Pretty)(nil)

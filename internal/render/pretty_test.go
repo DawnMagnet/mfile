@@ -12,6 +12,63 @@ import (
 	"github.com/DawnMagnet/mfile/internal/detect"
 )
 
+func TestPrettyColumns(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	rows := []detect.Result{
+		rowGoMod(),
+		rowLow(),
+		{
+			Index: 2, Path: strings.Repeat("dir/", 12) + "readme.md",
+			Label: "txt", Description: "ASCII text", MIME: "text/plain",
+			Group: "text", Score: 0.9, Source: "model", Size: 4096, Classified: true,
+		},
+		{Index: 3, Path: "missing.bin", Error: strings.Repeat("e", 90)},
+	}
+	full := renderAll(t, Options{Color: ColorNever, Icons: IconNone}, rows)
+	// A non-TTY keeps the full layout even if a width is supplied.
+	piped := renderAll(t, Options{Color: ColorNever, Icons: IconNone, IsTTY: tty(false), Columns: 80}, rows)
+	if piped != full || full != goldenColumnsFull {
+		t.Fatalf("non-TTY layout:\n got %q\nwant %q", piped, goldenColumnsFull)
+	}
+
+	tests := []struct {
+		name  string
+		width int
+		want  string
+	}{
+		{name: "80", width: 80, want: goldenColumns80},
+		{name: "100", width: 100, want: goldenColumns100},
+		{name: "120", width: 120, want: goldenColumns120},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opt := Options{Color: ColorNever, Icons: IconNone, IsTTY: tty(true), Columns: tt.width}
+			got := renderAll(t, opt, rows)
+			if got != tt.want {
+				t.Errorf("width %d:\n got %q\nwant %q", tt.width, got, tt.want)
+			}
+			for i, line := range strings.Split(strings.TrimSuffix(got, "\n"), "\n") {
+				if w := displayWidth(line); w > tt.width {
+					t.Errorf("line %d width %d > %d: %q", i, w, tt.width, line)
+				}
+			}
+			if !strings.Contains(got, "low") || !strings.Contains(got, "error:") {
+				t.Errorf("marker dropped:\n%s", got)
+			}
+		})
+	}
+	unicode := renderAll(t, Options{Color: ColorAlways, Icons: IconUnicode, IsTTY: tty(true), Columns: 80}, rows)
+	plain := stripANSI(unicode)
+	if !strings.Contains(plain, "⌘") || !strings.Contains(plain, "low") || !strings.Contains(plain, "error:") {
+		t.Fatalf("unicode 80 dropped a required field:\n%s", plain)
+	}
+	for i, line := range strings.Split(strings.TrimSuffix(plain, "\n"), "\n") {
+		if w := displayWidth(line); w > 80 {
+			t.Errorf("unicode line %d width %d: %q", i, w, line)
+		}
+	}
+}
+
 func TestPrettyGolden(t *testing.T) {
 	// Ambient NO_COLOR must not leak into these cases.
 	t.Setenv("NO_COLOR", "")
@@ -219,12 +276,12 @@ func TestPrettyWidth(t *testing.T) {
 	long := strings.Repeat("dir/", 20) + "readme.md"
 	cjk := strings.Repeat("照", 20) + ".png"
 	rows := []detect.Result{
-		{Seq: 0, Path: "go.mod", Description: "Verilog source", Label: "verilog", MimeType: "text/x-verilog", Group: "code", Score: 0.745, Source: detect.SourceModel, Size: 555},
-		{Seq: 1, Path: "照片.png", Description: "JPEG image", Label: "jpeg", MimeType: "image/jpeg", Group: "image", Score: 1, Source: detect.SourceMagic, Size: 2048},
-		{Seq: 2, Path: "cafe\u0301.txt", Description: "ASCII text", Label: "txt", MimeType: "text/plain", Group: "text", Score: 1, Source: detect.SourceMagic, Size: 3},
-		{Seq: 3, Path: long, Description: strings.Repeat("长", 20), Label: "txt", MimeType: strings.Repeat("m", 50), Group: "text", Score: 0.9, Source: detect.SourceModel, Size: 9},
-		{Seq: 4, Path: cjk, Description: "PNG image", Label: "png", MimeType: "image/png", Group: "image", Score: 0.9, Source: detect.SourceModel, Size: 9},
-		{Seq: 5, Path: "a\nb\x1b[31m", Description: "line\nbreak", Label: "x", MimeType: "text/plain", Group: "text", Score: 1, Source: detect.SourceName, Size: 1},
+		{Index: 0, Path: "go.mod", Description: "Verilog source", Label: "verilog", MIME: "text/x-verilog", Group: "code", Score: 0.745, Source: "model", Size: 555, Classified: true},
+		{Index: 1, Path: "照片.png", Description: "JPEG image", Label: "jpeg", MIME: "image/jpeg", Group: "image", Score: 1, Source: "magic", Size: 2048, Classified: true},
+		{Index: 2, Path: "cafe\u0301.txt", Description: "ASCII text", Label: "txt", MIME: "text/plain", Group: "text", Score: 1, Source: "magic", Size: 3, Classified: true},
+		{Index: 3, Path: long, Description: strings.Repeat("长", 20), Label: "txt", MIME: strings.Repeat("m", 50), Group: "text", Score: 0.9, Source: "model", Size: 9, Classified: true},
+		{Index: 4, Path: cjk, Description: "PNG image", Label: "png", MIME: "image/png", Group: "image", Score: 0.9, Source: "model", Size: 9, Classified: true},
+		{Index: 5, Path: "a\nb\x1b[31m", Description: "line\nbreak", Label: "x", MIME: "text/plain", Group: "text", Score: 1, Source: "name", Size: 1, Classified: true},
 	}
 	got := renderAll(t, Options{Color: ColorNever, Icons: IconNone}, rows)
 	if strings.Contains(got, "\x1b") {
@@ -276,9 +333,9 @@ func TestPrettyWidth(t *testing.T) {
 
 func TestPrettyErrors(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
-	row := detect.Result{Seq: 0, Path: "missing.bin", Err: errors.New("stat missing.bin: no such file")}
+	row := detect.Result{Index: 0, Path: "missing.bin", Error: "stat missing.bin: no such file"}
 	ok := rowGoMod()
-	ok.Seq = 1
+	ok.Index = 1
 
 	off := renderAll(t, Options{Color: ColorNever, Icons: IconNone}, []detect.Result{row, ok})
 	on := renderAll(t, Options{Color: ColorAlways, Icons: IconUnicode}, []detect.Result{row, ok})
@@ -302,7 +359,7 @@ func TestPrettyErrors(t *testing.T) {
 		t.Fatalf("unicode error icon missing: %q", on)
 	}
 	nl := renderAll(t, Options{Color: ColorNever, Icons: IconNone}, []detect.Result{{
-		Seq: 0, Path: "bad", Err: errors.New("boom\nhere"),
+		Index: 0, Path: "bad", Error: "boom\nhere",
 	}})
 	if strings.Contains(nl, "boom\nhere") || !strings.Contains(nl, "error: boom?here") {
 		t.Fatalf("error newline was not sanitized: %q", nl)
@@ -356,9 +413,9 @@ func TestPrettyOutOfOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	late := c
-	late.Seq = 4
+	late.Index = 4
 	mid := b
-	mid.Seq = 2
+	mid.Index = 2
 	if err := p.Write(late); err != nil || buf.Len() != 0 {
 		t.Fatalf("gap write: %v %q", err, buf.String())
 	}
@@ -390,9 +447,9 @@ func TestPrettyConcurrentWrite(t *testing.T) {
 	rows := make([]detect.Result, n)
 	for i := range rows {
 		rows[i] = detect.Result{
-			Seq: i, Path: "f", Description: "text", Label: "txt",
-			MimeType: "text/plain", Group: "text", Score: 1,
-			Source: detect.SourceModel, Size: int64(i),
+			Index: i, Path: "f", Description: "text", Label: "txt",
+			MIME: "text/plain", Group: "text", Score: 1,
+			Source: "model", Size: int64(i), Classified: true,
 		}
 		rows[i].Path = strings.Repeat("n", i%5) + "/" + strings.Repeat("x", i)
 	}
@@ -407,7 +464,7 @@ func TestPrettyConcurrentWrite(t *testing.T) {
 		go func(r detect.Result) {
 			defer wg.Done()
 			if err := p.Write(r); err != nil {
-				t.Errorf("write %d: %v", r.Seq, err)
+				t.Errorf("write %d: %v", r.Index, err)
 			}
 		}(rows[i])
 	}
@@ -450,7 +507,7 @@ func TestPrettyStaleSeq(t *testing.T) {
 		t.Fatal(err)
 	}
 	stale := rowLow()
-	stale.Seq = 0
+	stale.Index = 0
 	if err := p.Write(stale); err == nil {
 		t.Fatal("stale seq was accepted")
 	}
@@ -476,47 +533,74 @@ func TestPipeIsNotTerminal(t *testing.T) {
 func TestLowConfidenceThreshold(t *testing.T) {
 	base := rowGoMod()
 	base.Score = 0.5
-	base.Source = detect.SourceModel
+	base.Source = "model"
 	if lowConfidence(base) {
 		t.Fatal("score 0.5 should not be low")
 	}
-	base.Score = 0.5 - 1e-9
+	base.Score = 0.49
 	if !lowConfidence(base) {
-		t.Fatal("score just under 0.5 should be low")
+		t.Fatal("score 0.49 should be low")
 	}
 	base.Score = 0.99
-	base.Source = detect.SourceHeuristic
+	base.Source = "heuristic"
 	if !lowConfidence(base) {
 		t.Fatal("heuristic should be low at any score")
+	}
+	base.Source = "fallback"
+	if !lowConfidence(base) {
+		t.Fatal("fallback should be low at any score")
+	}
+	base.Source = "special"
+	if lowConfidence(base) {
+		t.Fatal("unknown source with a high score should not be low")
+	}
+}
+
+func TestUnknownSource(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	r := rowGoMod()
+	r.Source = "special"
+	r.Score = 0.91
+	got := renderAll(t, Options{Color: ColorNever, Icons: IconNone}, []detect.Result{r})
+	if strings.Contains(got, " low") || strings.Contains(got, "~") {
+		t.Fatalf("unknown source marked low: %q", got)
+	}
+	if !strings.Contains(got, "special") {
+		t.Fatalf("unknown source not printed: %q", got)
+	}
+	r.Source = "plugin"
+	got = renderAll(t, Options{Color: ColorNever, Icons: IconNone}, []detect.Result{r})
+	if !strings.Contains(got, "plugin") || strings.Contains(got, " low") {
+		t.Fatalf("arbitrary source: %q", got)
 	}
 }
 
 func rowGoMod() detect.Result {
 	return detect.Result{
-		Seq: 0, Path: "go.mod", Label: "verilog", Description: "Verilog source",
-		MimeType: "text/x-verilog", Group: "code", Score: 0.745,
-		Source: detect.SourceModel, Size: 555,
+		Index: 0, Path: "go.mod", Label: "verilog", Description: "Verilog source",
+		MIME: "text/x-verilog", Group: "code", Score: 0.745,
+		Source: "model", Size: 555, Classified: true,
 	}
 }
 
 func rowLow() detect.Result {
 	return detect.Result{
-		Seq: 1, Path: "notes.txt", Label: "txt", Description: "ASCII text",
-		MimeType: "text/plain", Group: "text", Score: 0.25,
-		Source: detect.SourceHeuristic, Size: 12,
+		Index: 1, Path: "notes.txt", Label: "txt", Description: "ASCII text",
+		MIME: "text/plain", Group: "text", Score: 0.25,
+		Source: "heuristic", Size: 12, Classified: true,
 	}
 }
 
 func rowJSON() detect.Result {
 	return detect.Result{
-		Seq: 2, Path: "data.json", Label: "json", Description: "JSON document",
-		MimeType: "application/json", Group: "code", Score: 0.91,
-		Source: detect.SourceModel, Size: 128,
+		Index: 2, Path: "data.json", Label: "json", Description: "JSON document",
+		MIME: "application/json", Group: "code", Score: 0.91,
+		Source: "model", Size: 128, Classified: true,
 	}
 }
 
 func rowError() detect.Result {
-	return detect.Result{Seq: 3, Path: "missing.bin", Err: errors.New("no such file")}
+	return detect.Result{Index: 3, Path: "missing.bin", Error: "no such file"}
 }
 
 func renderAll(t *testing.T, opt Options, rows []detect.Result) string {
@@ -569,6 +653,26 @@ func widthBefore(s, needle string) int {
 }
 
 // goldenOff is the color-off rendering of rowGoMod, rowLow, and rowError.
+const goldenColumnsFull = "go.mod                        Verilog source                code          score=0.745   size=555B       model      verilog           text/x-verilog\n" +
+	"notes.txt                     ASCII text                    text          score=0.250~  size=12B        heuristic  txt               text/plain  low\n" +
+	"dir/dir/dir/...dir/readme.md  ASCII text                    text          score=0.900   size=4.0KiB     model      txt               text/plain\n" +
+	"missing.bin                   error: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n"
+
+const goldenColumns80 = "go.mod            Verilog source                code          score=0.745 \n" +
+	"notes.txt         ASCII text                    text          score=0.250~  low\n" +
+	"dir/di...adme.md  ASCII text                    text          score=0.900 \n" +
+	"missing.bin       error: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee...\n"
+
+const goldenColumns100 = "go.mod            Verilog source                code          score=0.745   size=555B     \n" +
+	"notes.txt         ASCII text                    text          score=0.250~  size=12B        low\n" +
+	"dir/di...adme.md  ASCII text                    text          score=0.900   size=4.0KiB   \n" +
+	"missing.bin       error: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee...\n"
+
+const goldenColumns120 = "go.mod               Verilog source                code          score=0.745   size=555B       model    \n" +
+	"notes.txt            ASCII text                    text          score=0.250~  size=12B        heuristic  low\n" +
+	"dir/dir/...eadme.md  ASCII text                    text          score=0.900   size=4.0KiB     model    \n" +
+	"missing.bin          error: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n"
+
 const goldenOff = "go.mod                        Verilog source                code          score=0.745   size=555B       model      verilog           text/x-verilog\n" +
 	"notes.txt                     ASCII text                    text          score=0.250~  size=12B        heuristic  txt               text/plain  low\n" +
 	"missing.bin                   error: no such file\n"

@@ -43,23 +43,134 @@ type Options struct {
 	Icons IconMode
 	// IsTTY, when non-nil, overrides terminal detection on the writer.
 	IsTTY *bool
+	// Columns, when positive, is the terminal width in cells. It applies
+	// only when the output is a TTY; a pipe or buffer keeps the full layout.
+	// Zero asks a real terminal via golang.org/x/term GetSize.
+	Columns int
 }
 
 const (
-	// Column widths are display cells, not bytes. They are a fixed bound so
-	// a streaming writer can align rows without seeing later paths. Paths
-	// and descriptions longer than the bound are truncated on rune boundaries.
-	pathWidth   = 28
-	descWidth   = 28
-	groupWidth  = 12
-	sourceWidth = 9
-	labelWidth  = 16
-	mimeWidth   = 32
+	// Column widths are display cells, not bytes. The full layout uses these
+	// bounds so a streaming writer can align rows without seeing later paths.
+	// On a narrow terminal the path bound shrinks (down to pathWidthMin) and
+	// then optional columns are dropped. Paths and descriptions longer than
+	// the bound are truncated on rune boundaries.
+	pathWidth    = 28
+	pathWidthMin = 16
+	descWidth    = 28
+	groupWidth   = 12
+	scoreWidth   = 12
+	sizeWidth    = 14
+	sourceWidth  = 9
+	labelWidth   = 16
+	mimeWidth    = 32
+
+	// colSep separates columns. iconCols is a one-cell glyph plus a space.
+	colSep   = "  "
+	iconCols = 2
+	lowText  = "low"
 
 	// lowScoreThreshold marks a result as low confidence. A heuristic
 	// decision is low confidence at any score.
 	lowScoreThreshold = 0.5
 )
+
+// layout is the column plan chosen in Begin. cols is the terminal width
+// when the output is a TTY; zero keeps the full layout and does not clip
+// error text.
+type layout struct {
+	cols       int
+	pathW      int
+	showSize   bool
+	showSource bool
+	showLabel  bool
+	showMIME   bool
+}
+
+func fullLayout() layout {
+	return layout{
+		pathW:      pathWidth,
+		showSize:   true,
+		showSource: true,
+		showLabel:  true,
+		showMIME:   true,
+	}
+}
+
+// lineWidth is the display width of a low-confidence row, which is the
+// widest shape: every shown column plus the "low" marker.
+func (l layout) lineWidth(icons bool) int {
+	fields := []int{l.pathW, descWidth, groupWidth, scoreWidth}
+	if l.showSize {
+		fields = append(fields, sizeWidth)
+	}
+	if l.showSource {
+		fields = append(fields, sourceWidth)
+	}
+	if l.showLabel {
+		fields = append(fields, labelWidth)
+	}
+	if l.showMIME {
+		fields = append(fields, mimeWidth)
+	}
+	fields = append(fields, len(lowText))
+	w := fields[0]
+	if icons {
+		w += iconCols
+	}
+	for _, f := range fields[1:] {
+		w += len(colSep) + f
+	}
+	return w
+}
+
+// fitLayout sizes a TTY layout to width. The path budget scales with the
+// terminal (pathWidth * width / fullWidth, at least pathWidthMin) before any
+// column is removed. Columns then drop in order: label, MIME, source, size.
+// Path, description, group, and score stay. The low marker is part of the
+// budget, so it fits on the same line. If the core is still wider than the
+// terminal, the path shrinks below pathWidthMin until it fits or reaches one
+// cell.
+func fitLayout(width int, icons bool) layout {
+	l := fullLayout()
+	l.cols = width
+	full := l.lineWidth(icons)
+	if width >= full {
+		return l
+	}
+	path := pathWidth * width / full
+	if path < pathWidthMin {
+		path = pathWidthMin
+	}
+	if path > pathWidth {
+		path = pathWidth
+	}
+	l.pathW = path
+	for _, drop := range []*bool{&l.showLabel, &l.showMIME, &l.showSource, &l.showSize} {
+		if l.lineWidth(icons) <= width {
+			return l
+		}
+		*drop = false
+	}
+	for l.lineWidth(icons) > width && l.pathW > 1 {
+		l.pathW--
+	}
+	return l
+}
+
+func resolveLayout(w io.Writer, opt Options, icons bool) layout {
+	if !isTTY(w, opt) {
+		return fullLayout()
+	}
+	cols := opt.Columns
+	if cols <= 0 {
+		cols = terminalColumns(w)
+	}
+	if cols <= 0 {
+		return fullLayout()
+	}
+	return fitLayout(cols, icons)
+}
 
 const (
 	ansiReset = "\033[0m"
@@ -179,12 +290,7 @@ var (
 )
 
 func resolveAppearance(w io.Writer, opt Options) (color bool, icons iconSet) {
-	tty := false
-	if opt.IsTTY != nil {
-		tty = *opt.IsTTY
-	} else {
-		tty = isTerminal(w)
-	}
+	tty := isTTY(w, opt)
 	noColor := os.Getenv("NO_COLOR") != ""
 
 	switch opt.Color {
@@ -213,6 +319,13 @@ func resolveAppearance(w io.Writer, opt Options) (color bool, icons iconSet) {
 	return color, icons
 }
 
+func isTTY(w io.Writer, opt Options) bool {
+	if opt.IsTTY != nil {
+		return *opt.IsTTY
+	}
+	return isTerminal(w)
+}
+
 func isTerminal(w io.Writer) bool {
 	f, ok := w.(*os.File)
 	if !ok {
@@ -221,8 +334,34 @@ func isTerminal(w io.Writer) bool {
 	return term.IsTerminal(int(f.Fd()))
 }
 
+// terminalColumns reports the width of a terminal writer. A non-file or a
+// failed GetSize yields 0, and the caller keeps the full layout.
+func terminalColumns(w io.Writer) int {
+	f, ok := w.(*os.File)
+	if !ok {
+		return 0
+	}
+	cols, _, err := term.GetSize(int(f.Fd()))
+	if err != nil || cols <= 0 {
+		return 0
+	}
+	return cols
+}
+
+// lowSources are layers that are low confidence at any score. Source values
+// that are not listed, including ones added later (special, magic, name),
+// are printed as themselves and are low only when the score is under
+// lowScoreThreshold.
+var lowSources = map[string]struct{}{
+	"fallback":  {},
+	"heuristic": {},
+}
+
 func lowConfidence(r detect.Result) bool {
-	return r.Source == detect.SourceHeuristic || r.Score < lowScoreThreshold
+	if _, ok := lowSources[r.Source]; ok {
+		return true
+	}
+	return r.Score < lowScoreThreshold
 }
 
 func paint(enabled bool, code, s string) string {
@@ -260,7 +399,7 @@ func iconGlyph(set iconSet, label, group string, failed bool) (glyph, sgr string
 	return unicodeFallback, sgr
 }
 
-func scoreField(score float64, low bool) string {
+func scoreField(score float32, low bool) string {
 	if low {
 		// The tilde sits in the padding cell so the digits stay aligned.
 		return fmt.Sprintf("score=%.3f~", score)
@@ -270,20 +409,6 @@ func scoreField(score float64, low bool) string {
 
 func sizeField(n int64) string {
 	return fmt.Sprintf("size=%-9s", humanSize(n))
-}
-
-// humanSize matches the plain renderer's size text (555B, 1.0KiB, ...).
-func humanSize(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%dB", n)
-	}
-	v, i := float64(n), 0
-	for v >= unit && i < 6 {
-		v /= unit
-		i++
-	}
-	return fmt.Sprintf("%.1f%ciB", v, "KMGTPE"[i-1])
 }
 
 // sanitize keeps a field on one line and strips escapes so a file name
