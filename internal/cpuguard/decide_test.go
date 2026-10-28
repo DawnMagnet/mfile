@@ -49,16 +49,88 @@ func TestDecide(t *testing.T) {
 			env:  []string{"PATH=/usr/bin", "GODEBUG="},
 		},
 		{
-			name: "marker prevents loop",
-			cpu:  sandy,
-			env:  []string{"MFILE_CPU_GUARD=1", "GODEBUG=simd=0,cpu.avx2=off,cpu.fma=off"},
-		},
-		{
-			name:    "marker other value does not count",
+			name:    "affected empty env still reexecs",
 			cpu:     sandy,
-			env:     []string{"MFILE_CPU_GUARD=0"},
+			env:     []string{},
 			reexec:  true,
 			godebug: "simd=0,cpu.avx2=off,cpu.fma=off",
+		},
+		{
+			name:    "affected empty marker still reexecs",
+			cpu:     sandy,
+			env:     []string{"MFILE_CPU_GUARD="},
+			reexec:  true,
+			godebug: "simd=0,cpu.avx2=off,cpu.fma=off",
+		},
+		{
+			name: "affected reexec marker does not loop",
+			cpu:  sandy,
+			env:  []string{"MFILE_CPU_GUARD=reexec", "GODEBUG=simd=0,cpu.avx2=off,cpu.fma=off"},
+		},
+		{
+			name: "affected marker 1 is a manual skip",
+			cpu:  sandy,
+			env:  []string{"MFILE_CPU_GUARD=1"},
+		},
+		{
+			name: "affected arbitrary marker is a manual skip",
+			cpu:  sandy,
+			env:  []string{"MFILE_CPU_GUARD=debug"},
+		},
+		{
+			name: "affected marker 0 is a manual skip",
+			cpu:  sandy,
+			env:  []string{"MFILE_CPU_GUARD=0"},
+		},
+		{
+			name: "haswell without fma and reexec marker",
+			cpu:  haswellNoFMA,
+			env:  []string{"MFILE_CPU_GUARD=reexec"},
+		},
+		{
+			name: "haswell without fma and marker 1",
+			cpu:  haswellNoFMA,
+			env:  []string{"MFILE_CPU_GUARD=1"},
+		},
+		{
+			name: "haswell without fma and arbitrary marker",
+			cpu:  haswellNoFMA,
+			env:  []string{"MFILE_CPU_GUARD=skip"},
+		},
+		{
+			name: "good cpu unset",
+			cpu:  modern,
+			env:  nil,
+		},
+		{
+			name: "good cpu reexec marker",
+			cpu:  modern,
+			env:  []string{"MFILE_CPU_GUARD=reexec"},
+		},
+		{
+			name: "good cpu marker 1",
+			cpu:  modern,
+			env:  []string{"MFILE_CPU_GUARD=1"},
+		},
+		{
+			name: "good cpu arbitrary marker",
+			cpu:  modern,
+			env:  []string{"MFILE_CPU_GUARD=debug"},
+		},
+		{
+			name: "no avx with reexec marker",
+			cpu:  Features{},
+			env:  []string{"MFILE_CPU_GUARD=reexec"},
+		},
+		{
+			name: "no avx with marker 1",
+			cpu:  Features{},
+			env:  []string{"MFILE_CPU_GUARD=1"},
+		},
+		{
+			name: "no avx with arbitrary marker",
+			cpu:  Features{},
+			env:  []string{"MFILE_CPU_GUARD=whatever"},
 		},
 		{
 			name:    "godebug merged and ours last",
@@ -75,7 +147,12 @@ func TestDecide(t *testing.T) {
 			godebug: "simd=0,cpu.avx2=off,cpu.fma=off",
 		},
 		{
-			name: "case insensitive marker",
+			name: "case insensitive reexec marker",
+			cpu:  sandy,
+			env:  []string{"mfile_cpu_guard=reexec"},
+		},
+		{
+			name: "case insensitive manual marker",
 			cpu:  sandy,
 			env:  []string{"mfile_cpu_guard=1"},
 		},
@@ -129,7 +206,7 @@ func TestDecidePreservesAndReplacesEnv(t *testing.T) {
 		"GODEBUG=gctrace=1,simd=0,cpu.avx2=off,cpu.fma=off",
 		"GOMLX_GO_SIMD_AVX2=0",
 		"HOME=/home/me",
-		"MFILE_CPU_GUARD=1",
+		"MFILE_CPU_GUARD=reexec",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("env=%v\nwant %v", got, want)
@@ -138,6 +215,10 @@ func TestDecidePreservesAndReplacesEnv(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("env[%d]=%q, want %q\nfull %v", i, got[i], want[i], got)
 		}
+	}
+	again, childEnv := Decide(Features{HasAVX: true, HasAVX2: true}, got)
+	if again || childEnv != nil {
+		t.Fatalf("child re-execed: again=%v env=%v", again, childEnv)
 	}
 }
 
