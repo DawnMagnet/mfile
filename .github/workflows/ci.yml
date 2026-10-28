@@ -110,11 +110,12 @@ jobs:
       - name: Smoke test
         run: |
           set -euo pipefail
+          # setup-go's matcher is ^\s*(.+\.go):(?:line:col:)? <message>,
+          # and .go is greedy, so mfile's line for a .go file is annotated
+          # as a compiler error even with a prefix. Drop it before printing.
+          echo "::remove-matcher owner=go::"
           out=$(./bin/mfile cmd/mfile/main.go LICENSE)
-          # Prefix each line. setup-go's problem matcher treats
-          # "^<path>.go: <message>" as a compiler error, and mfile's
-          # text output for a .go file matches that pattern.
-          printf '%s\n' "${out}" | sed 's/^/smoke: /'
+          printf '%s\n' "${out}"
           if [ -z "${out}" ]; then
             echo "smoke test produced empty output"
             exit 1
@@ -173,10 +174,9 @@ jobs:
       - name: Smoke test
         run: |
           set -euo pipefail
+          echo "::remove-matcher owner=go::"
           out=$(./bin/mfile cmd/mfile/main.go LICENSE)
-          # Same prefix as the static-build smoke step: avoid the Go
-          # problem matcher annotating cmd/mfile/main.go as an error.
-          printf '%s\n' "${out}" | sed 's/^/smoke: /'
+          printf '%s\n' "${out}"
           if [ -z "${out}" ]; then
             echo "simd smoke test produced empty output"
             exit 1
