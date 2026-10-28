@@ -2,9 +2,7 @@ package render
 
 import (
 	"errors"
-	"fmt"
 	"io"
-	"sort"
 	"strings"
 	"sync"
 
@@ -24,9 +22,9 @@ import (
 // not a terminal or NO_COLOR is set to a non-empty value. Icons default to
 // unicode on a terminal and to none otherwise.
 //
-// Write is safe for concurrent use. Begin and End should bracket the writes:
-// call Begin, then Write any number of results, then End. End flushes results
-// that never became contiguous, in Index order.
+// Write emits each result immediately, in call order. Detection returns
+// results in input order, so pretty does not reorder. Begin and End bracket
+// the writes. Write is safe for concurrent use; each call emits one whole line.
 type Pretty struct {
 	w   io.Writer
 	opt Options
@@ -37,9 +35,6 @@ type Pretty struct {
 	color bool
 	icons iconSet
 	lay   layout
-
-	next int
-	buf  map[int]detect.Result
 }
 
 // NewPretty returns a renderer that writes to w. A nil writer is rejected
@@ -60,32 +55,22 @@ func (p *Pretty) Begin() error {
 	p.color = color
 	p.icons = icons
 	p.lay = resolveLayout(p.w, p.opt, icons != iconsNone)
-	p.next = 0
-	p.buf = make(map[int]detect.Result)
 	p.begun = true
 	p.ended = false
 	return nil
 }
 
-// Write buffers r until every lower Index has been seen, then writes those
-// lines. An Index that was already emitted returns an error. Writing an
-// Index that is still buffered replaces it, so a failed emit can be retried.
+// Write emits r immediately. Call order is output order.
 func (p *Pretty) Write(r detect.Result) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if !p.begun {
 		return errors.New("render: Write before Begin or after End")
 	}
-	if r.Index < p.next {
-		return fmt.Errorf("render: duplicate or stale index %d", r.Index)
-	}
-	// Overwrite an index that is still buffered so a failed emit can be retried.
-	p.buf[r.Index] = r
-	return p.flushReady()
+	return p.emit(r)
 }
 
-// End writes any results still buffered, in Index order, including gaps.
-// A second End is a no-op.
+// End finishes the renderer. A second End is a no-op.
 func (p *Pretty) End() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -95,41 +80,9 @@ func (p *Pretty) End() error {
 		}
 		return errors.New("render: End before Begin")
 	}
-	if err := p.flushReady(); err != nil {
-		return err
-	}
-	if len(p.buf) > 0 {
-		keys := make([]int, 0, len(p.buf))
-		for k := range p.buf {
-			keys = append(keys, k)
-		}
-		sort.Ints(keys)
-		for _, k := range keys {
-			if err := p.emit(p.buf[k]); err != nil {
-				return err
-			}
-			delete(p.buf, k)
-		}
-	}
 	p.begun = false
 	p.ended = true
 	return nil
-}
-
-// flushReady writes the contiguous run starting at p.next.
-// The caller holds p.mu.
-func (p *Pretty) flushReady() error {
-	for {
-		r, ok := p.buf[p.next]
-		if !ok {
-			return nil
-		}
-		if err := p.emit(r); err != nil {
-			return err
-		}
-		delete(p.buf, p.next)
-		p.next++
-	}
 }
 
 func (p *Pretty) emit(r detect.Result) error {
@@ -219,6 +172,9 @@ func (p *Pretty) fitError(msg string) string {
 	return prefix + truncEnd(msg, remain-prefixW)
 }
 
+// unclassified describes a path detect did not classify. Kind is one of
+// directory, symlink, fifo, socket, char device, block device, file, or other.
+// A symlink with a target is shown as a link rather than the bare kind.
 func unclassified(r detect.Result) string {
 	switch {
 	case r.Target != "":

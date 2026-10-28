@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -371,7 +372,7 @@ func TestPrettyErrors(t *testing.T) {
 	}
 }
 
-func TestPrettyOutOfOrder(t *testing.T) {
+func TestPrettyStreamsInCallOrder(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
 	a := rowGoMod()
 	b := rowLow()
@@ -386,14 +387,11 @@ func TestPrettyOutOfOrder(t *testing.T) {
 	if err := p.Write(c); err != nil {
 		t.Fatal(err)
 	}
-	if buf.Len() != 0 {
-		t.Fatalf("seq 2 emitted before seq 0: %q", buf.String())
+	if strings.Count(buf.String(), "\n") != 1 || !strings.Contains(buf.String(), "data.json") {
+		t.Fatalf("Write did not stream: %q", buf.String())
 	}
 	if err := p.Write(a); err != nil {
 		t.Fatal(err)
-	}
-	if got := strings.Count(buf.String(), "\n"); got != 1 || !strings.Contains(buf.String(), "go.mod") {
-		t.Fatalf("after seq 0: %q", buf.String())
 	}
 	if err := p.Write(b); err != nil {
 		t.Fatal(err)
@@ -402,32 +400,13 @@ func TestPrettyOutOfOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := buf.String()
-	want := renderAll(t, opt, []detect.Result{a, b, c})
+	want := renderAll(t, opt, []detect.Result{c, a, b})
 	if got != want {
-		t.Errorf("out of order:\n got: %q\nwant: %q", got, want)
+		t.Errorf("call order:\n got: %q\nwant: %q", got, want)
 	}
-
-	// A gap still flushes at End, in seq order.
-	buf.Reset()
-	if err := p.Begin(); err != nil {
-		t.Fatal(err)
-	}
-	late := c
-	late.Index = 4
-	mid := b
-	mid.Index = 2
-	if err := p.Write(late); err != nil || buf.Len() != 0 {
-		t.Fatalf("gap write: %v %q", err, buf.String())
-	}
-	if err := p.Write(mid); err != nil || buf.Len() != 0 {
-		t.Fatalf("gap write: %v %q", err, buf.String())
-	}
-	if err := p.End(); err != nil {
-		t.Fatal(err)
-	}
-	lines := strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
-	if len(lines) != 2 || !strings.Contains(lines[0], "notes.txt") || !strings.Contains(lines[1], "data.json") {
-		t.Fatalf("gap flush: %q", buf.String())
+	sorted := renderAll(t, opt, []detect.Result{a, b, c})
+	if got == sorted {
+		t.Fatal("Write reordered results by Index")
 	}
 
 	if err := p.Write(a); err == nil {
@@ -451,7 +430,7 @@ func TestPrettyConcurrentWrite(t *testing.T) {
 			MIME: "text/plain", Group: "text", Score: 1,
 			Source: "model", Size: int64(i), Classified: true,
 		}
-		rows[i].Path = strings.Repeat("n", i%5) + "/" + strings.Repeat("x", i)
+		rows[i].Path = "f" + strconv.Itoa(i)
 	}
 	var buf bytes.Buffer
 	p := NewPretty(&buf, Options{Color: ColorNever, Icons: IconNone})
@@ -473,9 +452,14 @@ func TestPrettyConcurrentWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := buf.String()
-	want := renderAll(t, Options{Color: ColorNever, Icons: IconNone}, rows)
-	if got != want {
-		t.Fatalf("concurrent render drifted\n got bytes %d\nwant bytes %d", len(got), len(want))
+	lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
+	if len(lines) != n {
+		t.Fatalf("got %d lines, want %d", len(lines), n)
+	}
+	for _, r := range rows {
+		if !strings.Contains(got, r.Path) {
+			t.Errorf("missing %q", r.Path)
+		}
 	}
 }
 
@@ -488,28 +472,11 @@ func TestPrettyWriterError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "disk full") {
 		t.Fatalf("Write err: %v", err)
 	}
-	if err := p.End(); err == nil {
-		t.Fatal("End swallowed the writer error")
+	if err := p.End(); err != nil {
+		t.Fatal(err)
 	}
 	if err := NewPretty(nil, Options{}).Begin(); err == nil {
 		t.Fatal("nil writer Begin succeeded")
-	}
-}
-
-func TestPrettyStaleSeq(t *testing.T) {
-	t.Setenv("NO_COLOR", "")
-	var buf bytes.Buffer
-	p := NewPretty(&buf, Options{Color: ColorNever, Icons: IconNone})
-	if err := p.Begin(); err != nil {
-		t.Fatal(err)
-	}
-	if err := p.Write(rowGoMod()); err != nil {
-		t.Fatal(err)
-	}
-	stale := rowLow()
-	stale.Index = 0
-	if err := p.Write(stale); err == nil {
-		t.Fatal("stale seq was accepted")
 	}
 }
 
@@ -542,17 +509,51 @@ func TestLowConfidenceThreshold(t *testing.T) {
 		t.Fatal("score 0.49 should be low")
 	}
 	base.Score = 0.99
-	base.Source = "heuristic"
-	if !lowConfidence(base) {
-		t.Fatal("heuristic should be low at any score")
-	}
-	base.Source = "fallback"
+	base.Source = detect.SourceFallback
 	if !lowConfidence(base) {
 		t.Fatal("fallback should be low at any score")
+	}
+	base.Source = "heuristic"
+	if lowConfidence(base) {
+		t.Fatal("heuristic is low only when the score is under 0.5")
+	}
+	base.Source = detect.SourceRule
+	if lowConfidence(base) {
+		t.Fatal("rule with a high score should not be low")
 	}
 	base.Source = "special"
 	if lowConfidence(base) {
 		t.Fatal("unknown source with a high score should not be low")
+	}
+}
+
+func TestPrettyUnclassified(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	rows := []detect.Result{
+		{Index: 0, Path: "subdir", Kind: "directory"},
+		{Index: 1, Path: "link", Kind: "symlink", Target: "hello.txt"},
+		{Index: 2, Path: "pipe", Kind: "fifo"},
+		{Index: 3, Path: "sock", Kind: "socket"},
+		{Index: 4, Path: "tty", Kind: "char device"},
+		{Index: 5, Path: "disk", Kind: "block device"},
+		{Index: 6, Path: "odd", Kind: "other"},
+	}
+	got := renderAll(t, Options{Color: ColorNever, Icons: IconNone}, rows)
+	for _, want := range []string{
+		"directory",
+		"symbolic link to hello.txt",
+		"fifo",
+		"socket",
+		"char device",
+		"block device",
+		"other",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "score=") || strings.Contains(got, " low") {
+		t.Fatalf("unclassified row looked classified:\n%s", got)
 	}
 }
 
@@ -587,7 +588,7 @@ func rowLow() detect.Result {
 	return detect.Result{
 		Index: 1, Path: "notes.txt", Label: "txt", Description: "ASCII text",
 		MIME: "text/plain", Group: "text", Score: 0.25,
-		Source: "heuristic", Size: 12, Classified: true,
+		Source: detect.SourceFallback, Size: 12, Classified: true,
 	}
 }
 
@@ -654,7 +655,7 @@ func widthBefore(s, needle string) int {
 
 // goldenOff is the color-off rendering of rowGoMod, rowLow, and rowError.
 const goldenColumnsFull = "go.mod                        Verilog source                code          score=0.745   size=555B       model      verilog           text/x-verilog\n" +
-	"notes.txt                     ASCII text                    text          score=0.250~  size=12B        heuristic  txt               text/plain  low\n" +
+	"notes.txt                     ASCII text                    text          score=0.250~  size=12B        fallback   txt               text/plain  low\n" +
 	"dir/dir/dir/...dir/readme.md  ASCII text                    text          score=0.900   size=4.0KiB     model      txt               text/plain\n" +
 	"missing.bin                   error: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n"
 
@@ -669,15 +670,15 @@ const goldenColumns100 = "go.mod            Verilog source                code  
 	"missing.bin       error: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee...\n"
 
 const goldenColumns120 = "go.mod               Verilog source                code          score=0.745   size=555B       model    \n" +
-	"notes.txt            ASCII text                    text          score=0.250~  size=12B        heuristic  low\n" +
+	"notes.txt            ASCII text                    text          score=0.250~  size=12B        fallback   low\n" +
 	"dir/dir/...eadme.md  ASCII text                    text          score=0.900   size=4.0KiB     model    \n" +
 	"missing.bin          error: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n"
 
 const goldenOff = "go.mod                        Verilog source                code          score=0.745   size=555B       model      verilog           text/x-verilog\n" +
-	"notes.txt                     ASCII text                    text          score=0.250~  size=12B        heuristic  txt               text/plain  low\n" +
+	"notes.txt                     ASCII text                    text          score=0.250~  size=12B        fallback   txt               text/plain  low\n" +
 	"missing.bin                   error: no such file\n"
 
 // goldenOn is the same rows with ColorAlways and IconsNone.
 const goldenOn = "\x1b[1mgo.mod                      \x1b[0m  \x1b[36mVerilog source              \x1b[0m  \x1b[36mcode        \x1b[0m  \x1b[2mscore=0.745 \x1b[0m  \x1b[2msize=555B     \x1b[0m  \x1b[2mmodel    \x1b[0m  \x1b[2mverilog         \x1b[0m  \x1b[2mtext/x-verilog\x1b[0m\n" +
-	"\x1b[1mnotes.txt                   \x1b[0m  \x1b[32mASCII text                  \x1b[0m  \x1b[32mtext        \x1b[0m  \x1b[2mscore=0.250~\x1b[0m  \x1b[2msize=12B      \x1b[0m  \x1b[2mheuristic\x1b[0m  \x1b[2mtxt             \x1b[0m  \x1b[2mtext/plain\x1b[0m  \x1b[1;4mlow\x1b[0m\n" +
+	"\x1b[1mnotes.txt                   \x1b[0m  \x1b[32mASCII text                  \x1b[0m  \x1b[32mtext        \x1b[0m  \x1b[2mscore=0.250~\x1b[0m  \x1b[2msize=12B      \x1b[0m  \x1b[2mfallback \x1b[0m  \x1b[2mtxt             \x1b[0m  \x1b[2mtext/plain\x1b[0m  \x1b[1;4mlow\x1b[0m\n" +
 	"\x1b[1;31mmissing.bin                 \x1b[0m  \x1b[1;31merror: no such file\x1b[0m\n"
