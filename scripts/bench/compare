@@ -65,7 +65,8 @@ def main() -> int:
     agree_labels = 0
     max_delta = 0.0
     max_where = ""
-    build_mismatch = []
+    label_mismatch = []
+    score_mismatch = []
     per_tool_label = {n: 0 for n in (*names, "magika", "file")}
     per_tool_mime = {n: 0 for n in (*names, "magika", "file")}
     per_tool_label_unk = {n: 0 for n in (*names, "magika", "file")}
@@ -91,24 +92,18 @@ def main() -> int:
         if len(set(labels)) == 1:
             agree_labels += 1
         else:
-            build_mismatch.append((rel, labels))
-        for a, b, pair in (
-            (rows["v1"]["score"], rows["simd"]["score"], "v1/simd"),
-            (rows["v1"]["score"], rows["simd_off"]["score"], "v1/simd_off"),
-            (rows["simd"]["score"], rows["simd_off"]["score"], "simd/simd_off"),
-        ):
-            delta = abs(a - b)
-            if delta > max_delta:
-                max_delta = delta
-                max_where = f"{rel} {pair}"
-            if delta > common.SCORE_TOL or len(set(labels)) != 1:
-                pass
-        if len(set(labels)) != 1 or max(
-            abs(rows["v1"]["score"] - rows["simd"]["score"]),
-            abs(rows["v1"]["score"] - rows["simd_off"]["score"]),
-        ) > common.SCORE_TOL:
-            if rel not in [m[0] for m in build_mismatch]:
-                build_mismatch.append((rel, labels))
+            label_mismatch.append((rel, labels))
+        gaps = {
+            "v1/simd": abs(rows["v1"]["score"] - rows["simd"]["score"]),
+            "v1/simd_off": abs(rows["v1"]["score"] - rows["simd_off"]["score"]),
+            "simd/simd_off": abs(rows["simd"]["score"] - rows["simd_off"]["score"]),
+        }
+        gap_name, gap = max(gaps.items(), key=lambda item: item[1])
+        if gap > max_delta:
+            max_delta = gap
+            max_where = f"{rel} {gap_name}"
+        if gap > common.SCORE_TOL:
+            score_mismatch.append((rel, gap_name, gap, rows["v1"]["score"], rows["simd"]["score"], rows["simd_off"]["score"]))
         is_known = exp.get("known_fail") == "1"
         if is_known:
             known += 1
@@ -200,11 +195,18 @@ def main() -> int:
     args.tsv.write_text("\n".join(tsv_lines) + "\n", encoding="utf-8")
     print(f"\nper-file table: {args.tsv}")
 
-    failed = bool(build_mismatch) or max_delta > common.SCORE_TOL
-    if build_mismatch:
+    failed = bool(label_mismatch) or bool(score_mismatch)
+    if label_mismatch:
         print("\nbuild label mismatches:", file=sys.stderr)
-        for rel, labels in build_mismatch:
+        for rel, labels in label_mismatch:
             print(f"  {rel}: {labels}", file=sys.stderr)
+    if score_mismatch:
+        print(f"\nbuild score gaps above {common.SCORE_TOL:g}:", file=sys.stderr)
+        for rel, pair, gap, v1s, simds, offs in score_mismatch:
+            print(
+                f"  {rel} {pair} delta={gap:.3e} v1={v1s:.8g} simd={simds:.8g} simd_off={offs:.8g}",
+                file=sys.stderr,
+            )
     return 1 if failed else 0
 
 

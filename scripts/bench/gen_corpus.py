@@ -1228,7 +1228,16 @@ def edge_and_mismatch(png: bytes) -> list[tuple[str, str, str, str, str, bytes]]
             "JSON",
             "0",
             "extension says png; body is JSON",
-            (b'{"type":"mismatch","reason":"extension is png but the body is json"}\n' * 20),
+            b"""{
+  "type": "mismatch",
+  "reason": "extension is png but the body is json",
+  "items": [
+    {"id": 1, "name": "alpha", "ok": true},
+    {"id": 2, "name": "beta", "ok": false},
+    {"id": 3, "name": "gamma", "ok": true}
+  ]
+}
+""",
         ),
         (
             "mismatch/notes.txt",

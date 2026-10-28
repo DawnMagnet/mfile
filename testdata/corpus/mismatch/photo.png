@@ -1,20 +1,9 @@
-{"type":"mismatch","reason":"extension is png but the body is json"}
-{"type":"mismatch","reason":"extension is png but the body is json"}
-{"type":"mismatch","reason":"extension is png but the body is json"}
-{"type":"mismatch","reason":"extension is png but the body is json"}
-{"type":"mismatch","reason":"extension is png but the body is json"}
-{"type":"mismatch","reason":"extension is png but the body is json"}
-{"type":"mismatch","reason":"extension is png but the body is json"}
-{"type":"mismatch","reason":"extension is png but the body is json"}
-{"type":"mismatch","reason":"extension is png but the body is json"}
-{"type":"mismatch","reason":"extension is png but the body is json"}
-{"type":"mismatch","reason":"extension is png but the body is json"}
-{"type":"mismatch","reason":"extension is png but the body is json"}
-{"type":"mismatch","reason":"extension is png but the body is json"}
-{"type":"mismatch","reason":"extension is png but the body is json"}
-{"type":"mismatch","reason":"extension is png but the body is json"}
-{"type":"mismatch","reason":"extension is png but the body is json"}
-{"type":"mismatch","reason":"extension is png but the body is json"}
-{"type":"mismatch","reason":"extension is png but the body is json"}
-{"type":"mismatch","reason":"extension is png but the body is json"}
-{"type":"mismatch","reason":"extension is png but the body is json"}
+{
+  "type": "mismatch",
+  "reason": "extension is png but the body is json",
+  "items": [
+    {"id": 1, "name": "alpha", "ok": true},
+    {"id": 2, "name": "beta", "ok": false},
+    {"id": 3, "name": "gamma", "ok": true}
+  ]
+}

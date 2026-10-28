@@ -65,8 +65,8 @@ edge/empty	empty	inode/x-empty	empty	0	zero-length file
 edge/latin1.txt	txt	text/plain	ISO-8859	0	ISO-8859-1 text, not valid UTF-8
 edge/long_line.txt	txt	text/plain	ASCII	0	one line longer than 100KB
 edge/one_byte.txt	txt	text/plain	very short file	0	one ASCII byte; below min_file_size_for_dl
-edge/one_ff.bin	unknown	application/octet-stream	data	0	single non-UTF-8 byte; short-file rule yields unknown
-edge/one_nul.bin	txt	text/plain	ASCII	0	NUL is valid UTF-8, so the short-file rule yields txt
+edge/one_ff.bin	unknown	application/octet-stream	very short file	0	single non-UTF-8 byte; short-file rule yields unknown
+edge/one_nul.bin	txt	text/plain	very short file	0	NUL is valid UTF-8, so the short-file rule yields txt
 edge/random.bin	unknown	application/octet-stream	data	0	deterministic pseudo-random bytes
 edge/utf16be.txt	txt	text/plain	UTF-16	0	UTF-16 BE with BOM
 edge/utf16le.txt	txt	text/plain	UTF-16	0	UTF-16 LE with BOM

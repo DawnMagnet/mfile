@@ -13,7 +13,7 @@ import shutil
 from pathlib import Path
 
 SMALL_TEMPLATES = [
-    "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println({n})\n}\n",
+    "package main\n\nimport \"fmt\"\n\nfunc main() {{\n\tfmt.Println({n})\n}}\n",
     "def f(n):\n    return n * {n} + 1\n\nif __name__ == '__main__':\n    print(f({n}))\n",
     '{{"id": {n}, "ok": true, "name": "sample-{n}"}}\n',
     "#include <stdio.h>\nint main(void) {{ printf(\"%d\\n\", {n}); }}\n",
