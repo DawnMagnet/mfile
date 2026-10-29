@@ -1,12 +1,25 @@
-# magika-go-poc
+# mfile
 
-A static, cgo-free `file` replacement that identifies content types with
-Google's [Magika](https://github.com/google/magika) `standard_v3_3` model and
-prints basic metadata (size, mode, mtime, symlink target).
+`mfile` is a modern, fast replacement for `file(1)`. It identifies content
+types with an embedded deep-learning model and prints basic metadata (size,
+mode, mtime, symlink target). It is a single static binary: pure Go, no cgo,
+no ONNX Runtime; the model, config and content-types knowledge base are
+embedded with `go:embed`.
 
 Inference runs on the pure Go gomlx backend (`github.com/gomlx/compute/gobackend`)
-through `github.com/gomlx/onnx-gomlx`. No ONNX Runtime, no cgo; the model,
-config and content types KB are embedded with `go:embed`.
+through `github.com/gomlx/onnx-gomlx`.
+
+## Install
+
+Download a prebuilt binary from [GitHub Releases](https://github.com/DawnMagnet/mfile/releases)
+(`mfile_<version>_<os>_<arch>.tar.gz`, or `.zip` on Windows), check it against
+`SHA256SUMS`, and put `mfile` on your `PATH`.
+
+Or install with Go:
+
+```bash
+CGO_ENABLED=0 go install github.com/DawnMagnet/mfile/cmd/mfile@latest
+```
 
 ## Build
 
@@ -95,7 +108,7 @@ the invocations:
 | simd, batches of 4, 8 workers, 16 Ps | 0.11 s | 12.2 s | ~440 MiB |
 | default build, batch 1, 16 workers, 16 Ps | 0.16 s | 42.8 s | 194 MiB |
 | simd, batch 1, 8 workers, 8 Ps (current) | 0.14 s | 11.2 s | 133 MiB |
-| official `magika` 1.1.0 CLI | 0.29 s | 12.8–13.4 s | 129 MiB |
+| upstream reference CLI (Python, 1.1.0), for comparison | 0.29 s | 12.8–13.4 s | 129 MiB |
 
 A single file peaks at about 54 MiB.
 
@@ -106,3 +119,9 @@ fewer than `min_file_size_for_dl` bytes after stripping whitespace are `txt`
 (valid UTF-8) or `unknown`; otherwise the model label is mapped through
 `overwrite_map`, and predictions below the per-label threshold fall back to
 `txt` (text types) or `unknown`.
+
+## License and credits
+
+mfile is licensed under Apache-2.0. The embedded model (`standard_v3_3`),
+its config and the content-types knowledge base come from Google's
+[Magika](https://github.com/google/magika) project (Apache-2.0); see `NOTICE`.
