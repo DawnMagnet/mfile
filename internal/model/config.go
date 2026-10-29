@@ -1,4 +1,4 @@
-package magika
+package model
 
 import (
 	"encoding/json"
@@ -11,7 +11,7 @@ const (
 	labelUnknown = "unknown"
 )
 
-// Config holds the inference-relevant part of a Magika model config.
+// Config holds the inference-relevant part of the embedded model config.
 type Config struct {
 	BegSize                   int                `json:"beg_size"`
 	MidSize                   int                `json:"mid_size"`

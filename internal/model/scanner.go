@@ -1,4 +1,4 @@
-package magika
+package model
 
 import (
 	"fmt"
@@ -11,7 +11,7 @@ import (
 	"github.com/gomlx/compute/gobackend"
 	"github.com/gomlx/gomlx/core/graph"
 	"github.com/gomlx/gomlx/core/tensors"
-	"github.com/gomlx/gomlx/ml/model"
+	mlmodel "github.com/gomlx/gomlx/ml/model"
 	"github.com/gomlx/onnx-gomlx/onnx/parser"
 )
 
@@ -43,13 +43,14 @@ type Result struct {
 	Source string `json:"-"`
 }
 
-// Scanner runs the Magika model on the pure Go (SimpleGo) gomlx backend.
-// ScanAll is not safe for concurrent use; it parallelizes internally.
+// Scanner runs the embedded content-type model on the pure Go (SimpleGo)
+// gomlx backend. ScanAll is not safe for concurrent use; it parallelizes
+// internally.
 type Scanner struct {
 	cfg      Config
 	kb       map[string]ContentType
 	backend  compute.Backend
-	exec     *model.Exec
+	exec     *mlmodel.Exec
 	inLen    int
 	workers  int
 	maxBatch int
@@ -75,7 +76,7 @@ func NewScanner(onnxModel, config, contentTypesKB []byte) (*Scanner, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse onnx model: %w", err)
 	}
-	store := model.NewStore()
+	store := mlmodel.NewStore()
 	if err := m.VariablesToScope(store.RootScope()); err != nil {
 		return nil, fmt.Errorf("load onnx variables: %w", err)
 	}
@@ -83,7 +84,7 @@ func NewScanner(onnxModel, config, contentTypesKB []byte) (*Scanner, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create go backend: %w", err)
 	}
-	exec, err := model.NewExec(backend, store, func(scope *model.Scope, x *graph.Node) *graph.Node {
+	exec, err := mlmodel.NewExec(backend, store, func(scope *mlmodel.Scope, x *graph.Node) *graph.Node {
 		return m.CallGraph(scope, x.Graph(), map[string]*graph.Node{"bytes": x})[0]
 	})
 	if err != nil {

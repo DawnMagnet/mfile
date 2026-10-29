@@ -1,5 +1,5 @@
 // Command mfile is a static, cgo-free `file` replacement that identifies
-// content types with Google's Magika model and prints basic file metadata.
+// content types with an embedded deep-learning model and prints basic file metadata.
 package main
 
 import (

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/DawnMagnet/mfile/assets"
-	"github.com/DawnMagnet/mfile/internal/magika"
+	"github.com/DawnMagnet/mfile/internal/model"
 )
 
 // Options controls scanning. Zero values keep the scanner defaults.
@@ -32,7 +32,7 @@ type Stats struct {
 func Scan(paths []string, opts Options) ([]Result, Stats, error) {
 	t0 := time.Now()
 	results := make([]Result, len(paths))
-	var inputs []magika.Input
+	var inputs []model.Input
 	var idx []int
 	var files []*os.File
 	defer func() {
@@ -71,7 +71,7 @@ func Scan(paths []string, opts Options) ([]Result, Stats, error) {
 			continue
 		}
 		files = append(files, f)
-		inputs = append(inputs, magika.Input{R: f, Size: int(fi.Size())})
+		inputs = append(inputs, model.Input{R: f, Size: int(fi.Size())})
 		idx = append(idx, i)
 	}
 
@@ -80,7 +80,7 @@ func Scan(paths []string, opts Options) ([]Result, Stats, error) {
 		return results, stats, nil
 	}
 	t1 := time.Now()
-	s, err := magika.NewScanner(assets.Model, assets.Config, assets.ContentTypesKB)
+	s, err := model.NewScanner(assets.Model, assets.Config, assets.ContentTypesKB)
 	if err != nil {
 		return nil, Stats{}, err
 	}
@@ -110,7 +110,7 @@ func Scan(paths []string, opts Options) ([]Result, Stats, error) {
 	return results, stats, nil
 }
 
-func (r *Result) setContent(m magika.Result) {
+func (r *Result) setContent(m model.Result) {
 	r.Label = m.Label
 	r.MIME = m.MimeType
 	r.Group = m.Group

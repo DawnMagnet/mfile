@@ -47,7 +47,8 @@ jobs:
         run: go vet ./...
 
       # The accuracy test (scripts/bench/accuracy) is behind a build tag and
-      # needs Python magika to run, so CI never compiles it otherwise.
+      # needs the pinned third-party Python package in scripts/bench/requirements.txt
+      # to run, so CI never compiles it otherwise.
       # vet only type-checks it, so API changes cannot silently break it.
       - name: go vet (accuracy tag)
         run: go vet -tags accuracy ./scripts/bench/accuracy/

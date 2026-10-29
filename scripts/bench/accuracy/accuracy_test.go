@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/DawnMagnet/mfile/assets"
-	"github.com/DawnMagnet/mfile/internal/magika"
+	"github.com/DawnMagnet/mfile/internal/model"
 )
 
 // The score tolerance lives in scripts/bench/gate.json so this test and the
@@ -56,7 +56,7 @@ func TestCorpusStabilityAndMagika(t *testing.T) {
 		}
 	}()
 
-	scanner, err := magika.NewScanner(assets.Model, assets.Config, assets.ContentTypesKB)
+	scanner, err := model.NewScanner(assets.Model, assets.Config, assets.ContentTypesKB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,9 +303,9 @@ func samplePaths(t *testing.T, corpus string) []string {
 	return paths
 }
 
-func openInputs(t *testing.T, paths []string) ([]magika.Input, []*os.File) {
+func openInputs(t *testing.T, paths []string) ([]model.Input, []*os.File) {
 	t.Helper()
-	inputs := make([]magika.Input, len(paths))
+	inputs := make([]model.Input, len(paths))
 	files := make([]*os.File, len(paths))
 	for i, path := range paths {
 		f, err := os.Open(path)
@@ -317,7 +317,7 @@ func openInputs(t *testing.T, paths []string) ([]magika.Input, []*os.File) {
 			t.Fatal(err)
 		}
 		files[i] = f
-		inputs[i] = magika.Input{R: f, Size: int(info.Size())}
+		inputs[i] = model.Input{R: f, Size: int(info.Size())}
 	}
 	return inputs, files
 }

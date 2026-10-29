@@ -1,19 +1,19 @@
-// Package detect stats paths and classifies regular files with Magika.
+// Package detect stats paths and classifies regular files with the embedded model.
 package detect
 
 import (
 	"time"
 
-	"github.com/DawnMagnet/mfile/internal/magika"
+	"github.com/DawnMagnet/mfile/internal/model"
 )
 
 const (
 	// SourceModel means the model score was accepted, after overwrite_map.
-	SourceModel = magika.SourceModel
+	SourceModel = model.SourceModel
 	// SourceFallback means a low score was replaced with txt or unknown.
-	SourceFallback = magika.SourceFallback
+	SourceFallback = model.SourceFallback
 	// SourceRule means a pre-model rule decided (empty, or below min size).
-	SourceRule = magika.SourceRule
+	SourceRule = model.SourceRule
 )
 
 // Result is one path after stat and, for regular files, content detection.
