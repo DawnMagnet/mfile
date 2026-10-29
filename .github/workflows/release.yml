@@ -1,0 +1,333 @@
+name: release
+
+# Draft GitHub Release for a pushed v* tag. Domi publishes the draft by hand.
+# This workflow does not create, move, or delete tags: gh release create
+# is passed --verify-tag, and checkout does not persist credentials.
+#
+# Version string printed by `mfile --version`: the tag with the leading
+# "v" removed. Tag v0.1.0 is injected as -X main.version=0.1.0, so the
+# first line is "mfile 0.1.0" (the rest of the existing version report
+# follows: Go version, GOAMD64, simd, cpu_guard). Untagged builds leave
+# main.version empty; internal/version then prints "dev", or the
+# build-info module version when that is set.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions: {}
+
+# One run per tag. A re-run waits and must not cancel a publish in progress.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # contents: read cannot save the Actions cache.
+          cache: false
+
+      # Same command as the CI test job in ci.yml. -race needs cgo on the
+      # runner; the release job still builds with CGO_ENABLED=0.
+      # -d=checkptr=0 skips the gomlx matmul checkptr abort described in ci.yml.
+      - name: Test
+        run: go test -race -gcflags=all=-d=checkptr=0 -timeout 20m ./...
+
+  release:
+    name: release
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build release archives
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # file(1) and sort must stay in English / byte order.
+          export LC_ALL=C
+
+          case "${TAG}" in
+            v*) ;;
+            *)
+              echo "expected a tag matching v*, got ${TAG}" >&2
+              exit 1
+              ;;
+          esac
+          version="${TAG#v}"
+          if [ -z "${version}" ]; then
+            echo "empty version from tag ${TAG}" >&2
+            exit 1
+          fi
+          # Archive names and -X main.version= both embed this string.
+          case "${version}" in
+            *[!0-9A-Za-z._+-]*)
+              echo "version contains unsupported characters: ${version}" >&2
+              exit 1
+              ;;
+          esac
+          case "${version}" in
+            [0-9]*) ;;
+            *)
+              echo "version must start with a digit, got ${version}" >&2
+              exit 1
+              ;;
+          esac
+
+          command -v zip >/dev/null
+          command -v zipinfo >/dev/null
+          command -v sha256sum >/dev/null
+          command -v file >/dev/null
+
+          # Outside the checkout. A staging directory inside the repo would
+          # make `go build` record vcs.modified=true.
+          release_dir="${RUNNER_TEMP:-/tmp}/mfile-release"
+          rm -rf "${release_dir}"
+          mkdir -p "${release_dir}"
+          # Read by the publish step. Not an uploaded asset.
+          printf '%s\n' "${version}" > "${release_dir}/VERSION"
+          {
+            printf 'Draft release of mfile %s.\n' "${version}"
+            printf '\n'
+            printf 'Static pure-Go builds (CGO_ENABLED=0) for linux, darwin, and windows.\n'
+            printf 'mfile --version prints %s: the git tag with the leading v removed.\n' "${version}"
+            printf 'The first line is: mfile %s\n' "${version}"
+            printf '\n'
+            printf 'SHA256SUMS is standard sha256sum output. From a directory that contains the archives:\n'
+            printf '\n'
+            printf '    sha256sum -c SHA256SUMS\n'
+          } > "${release_dir}/NOTES.txt"
+
+          targets=(
+            linux/amd64
+            linux/arm64
+            darwin/amd64
+            darwin/arm64
+            windows/amd64
+          )
+          for target in "${targets[@]}"; do
+            goos="${target%%/*}"
+            goarch="${target##*/}"
+            binname="mfile"
+            if [ "${goos}" = "windows" ]; then
+              binname="mfile.exe"
+            fi
+
+            stage="${release_dir}/stage-${goos}-${goarch}"
+            rm -rf "${stage}"
+            mkdir -p "${stage}"
+
+            ldflags="-s -w -X main.version=${version}"
+            CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" \
+              go build -trimpath -ldflags="${ldflags}" -o "${stage}/${binname}" ./cmd/mfile
+
+            info=$(file -b "${stage}/${binname}")
+            printf '%s/%s: %s\n' "${goos}" "${goarch}" "${info}"
+            case "${goos}/${goarch}" in
+              linux/amd64)
+                case "${info}" in
+                  ELF*"x86-64"*"statically linked"*) ;;
+                  *)
+                    echo "linux/amd64 binary has unexpected type: ${info}" >&2
+                    exit 1
+                    ;;
+                esac
+                ;;
+              linux/arm64)
+                case "${info}" in
+                  ELF*"aarch64"*"statically linked"*) ;;
+                  *)
+                    echo "linux/arm64 binary has unexpected type: ${info}" >&2
+                    exit 1
+                    ;;
+                esac
+                ;;
+              darwin/amd64)
+                case "${info}" in
+                  "Mach-O"*"x86_64"*) ;;
+                  *)
+                    echo "darwin/amd64 binary has unexpected type: ${info}" >&2
+                    exit 1
+                    ;;
+                esac
+                ;;
+              darwin/arm64)
+                case "${info}" in
+                  "Mach-O"*arm64*) ;;
+                  *)
+                    echo "darwin/arm64 binary has unexpected type: ${info}" >&2
+                    exit 1
+                    ;;
+                esac
+                ;;
+              windows/amd64)
+                case "${info}" in
+                  PE32+*"x86-64"*) ;;
+                  *)
+                    echo "windows/amd64 binary has unexpected type: ${info}" >&2
+                    exit 1
+                    ;;
+                esac
+                ;;
+              *)
+                echo "unexpected target ${target}" >&2
+                exit 1
+                ;;
+            esac
+
+            cp LICENSE NOTICE README.md "${stage}/"
+            if [ "${goos}" = "windows" ]; then
+              archive="mfile_${version}_windows_amd64.zip"
+              (
+                cd "${stage}"
+                zip -X -q "../${archive}" "${binname}" LICENSE NOTICE README.md
+              )
+              names=$(zipinfo -1 "${release_dir}/${archive}" | sort)
+            else
+              archive="mfile_${version}_${goos}_${goarch}.tar.gz"
+              tar -C "${stage}" -czf "${release_dir}/${archive}" "${binname}" LICENSE NOTICE README.md
+              names=$(tar -tzf "${release_dir}/${archive}" | sort)
+            fi
+            expected=$(printf '%s\n' LICENSE NOTICE README.md "${binname}" | sort)
+            if [ "${names}" != "${expected}" ]; then
+              echo "archive ${archive} has unexpected contents:" >&2
+              printf '%s\n' "${names}" >&2
+              echo "expected:" >&2
+              printf '%s\n' "${expected}" >&2
+              exit 1
+            fi
+            rm -rf "${stage}"
+          done
+
+          (
+            cd "${release_dir}"
+            sha256sum \
+              "mfile_${version}_linux_amd64.tar.gz" \
+              "mfile_${version}_linux_arm64.tar.gz" \
+              "mfile_${version}_darwin_amd64.tar.gz" \
+              "mfile_${version}_darwin_arm64.tar.gz" \
+              "mfile_${version}_windows_amd64.zip" \
+              > SHA256SUMS
+            sha256sum -c SHA256SUMS
+          )
+
+          smoke="${release_dir}/smoke"
+          rm -rf "${smoke}"
+          mkdir -p "${smoke}"
+          tar -C "${smoke}" -xzf "${release_dir}/mfile_${version}_linux_amd64.tar.gz"
+          # setup-go's matcher treats ".go: ..." lines as compiler errors.
+          echo "::remove-matcher owner=go::"
+          ver_out=$("${smoke}/mfile" --version)
+          printf '%s\n' "${ver_out}"
+          ver_first="${ver_out%%$'\n'*}"
+          if [ "${ver_first}" != "mfile ${version}" ]; then
+            echo "version line ${ver_first} != mfile ${version}" >&2
+            exit 1
+          fi
+          sample=$("${smoke}/mfile" \
+            LICENSE \
+            README.md \
+            testdata/corpus/text/plain.txt \
+            testdata/corpus/config/app.yaml \
+            testdata/corpus/code/hello.go \
+            testdata/corpus/edge/empty)
+          printf '%s\n' "${sample}"
+          if [ -z "${sample}" ]; then
+            echo "smoke test produced empty output" >&2
+            exit 1
+          fi
+          rm -rf "${smoke}"
+
+      - name: Create or update draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          release_dir="${RUNNER_TEMP:-/tmp}/mfile-release"
+          version=$(tr -d '\r\n' < "${release_dir}/VERSION")
+          if [ -z "${version}" ]; then
+            echo "${release_dir}/VERSION is empty" >&2
+            exit 1
+          fi
+          if [ ! -f "${release_dir}/NOTES.txt" ]; then
+            echo "${release_dir}/NOTES.txt is missing" >&2
+            exit 1
+          fi
+
+          assets=(
+            "${release_dir}/mfile_${version}_linux_amd64.tar.gz"
+            "${release_dir}/mfile_${version}_linux_arm64.tar.gz"
+            "${release_dir}/mfile_${version}_darwin_amd64.tar.gz"
+            "${release_dir}/mfile_${version}_darwin_arm64.tar.gz"
+            "${release_dir}/mfile_${version}_windows_amd64.zip"
+            "${release_dir}/SHA256SUMS"
+          )
+          for asset in "${assets[@]}"; do
+            if [ ! -f "${asset}" ]; then
+              echo "missing release asset ${asset}" >&2
+              exit 1
+            fi
+          done
+
+          # A re-run that finds a draft replaces assets in place.
+          # --clobber deletes same-named assets before uploading them.
+          # A published release is left alone.
+          # --verify-tag refuses to create a release (or a tag) when the
+          # tag is not already in the remote repository.
+          set +e
+          view_out=$(gh release view "${TAG}" --json isDraft --jq .isDraft 2>&1)
+          view_status=$?
+          set -e
+          if [ "${view_status}" -eq 0 ]; then
+            if [ "${view_out}" != "true" ]; then
+              echo "release ${TAG} already exists and is not a draft (isDraft=${view_out}); refusing to modify it" >&2
+              exit 1
+            fi
+            echo "draft release ${TAG} already exists; replacing assets"
+            gh release upload "${TAG}" "${assets[@]}" --clobber
+          else
+            case "${view_out}" in
+              "release not found")
+                gh release create "${TAG}" "${assets[@]}" \
+                  --draft \
+                  --verify-tag \
+                  --title "${TAG}" \
+                  --notes-file "${release_dir}/NOTES.txt"
+                ;;
+              *)
+                echo "gh release view ${TAG} failed:" >&2
+                printf '%s\n' "${view_out}" >&2
+                exit "${view_status}"
+                ;;
+            esac
+          fi
