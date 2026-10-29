@@ -1,4 +1,4 @@
-"""Rewrite the Magika ONNX model into ops that run fast on gomlx's Go backend.
+"""Rewrite the embedded ONNX content-type model into ops that run fast on gomlx's Go backend.
 
 The rewrites are mathematically equivalent to the original graph:
 

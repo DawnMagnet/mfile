@@ -1,7 +1,7 @@
-// Feature extraction ported from github.com/google/magika/go/magika
+// Feature extraction ported from the upstream Go reference implementation
 // (Copyright 2024 Google LLC, Apache-2.0).
 
-package magika
+package model
 
 import (
 	"bytes"

@@ -1,5 +1,6 @@
-// Package assets embeds the Magika model, its config and the content types
-// knowledge base, taken from github.com/google/magika/assets.
+// Package assets embeds mfile's content-type model, its config, and the
+// content types knowledge base. The model, config, and knowledge base come
+// from Google's Magika project.
 //
 // model.patched.onnx is model.onnx rewritten by tools/patch_model.py into an
 // equivalent graph that onnx-gomlx supports and the Go backend runs fast:
@@ -9,7 +10,7 @@ package assets
 
 import _ "embed"
 
-// ModelName is the name of the embedded Magika model.
+// ModelName is the name of the embedded model.
 const ModelName = "standard_v3_3"
 
 //go:embed standard_v3_3/model.patched.onnx

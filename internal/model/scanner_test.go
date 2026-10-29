@@ -1,4 +1,4 @@
-package magika
+package model
 
 import (
 	"bytes"
