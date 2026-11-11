@@ -3,16 +3,16 @@ module github.com/DawnMagnet/mfile
 go 1.27.3
 
 require (
-	github.com/gomlx/compute v0.1.15
-	github.com/gomlx/gomlx v0.28.18
-	github.com/gomlx/onnx-gomlx v0.5.15
+	github.com/gomlx/compute v0.1.25
+	github.com/gomlx/gomlx v0.28.29
+	github.com/gomlx/onnx-gomlx v0.5.26
 	github.com/spf13/pflag v1.0.10
 	golang.org/x/sys v0.48.0
 )
 
 require (
 	github.com/go-logr/logr v1.4.3 // indirect
-	github.com/gomlx/compute-onnx v0.1.14 // indirect
+	github.com/gomlx/compute-onnx v0.1.24 // indirect
 	github.com/gomlx/exceptions v0.0.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
