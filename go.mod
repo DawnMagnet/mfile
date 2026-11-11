@@ -3,7 +3,7 @@ module github.com/DawnMagnet/mfile
 go 1.27.3
 
 require (
-	github.com/gomlx/compute v0.1.15
+	github.com/gomlx/compute v0.1.25
 	github.com/gomlx/gomlx v0.28.18
 	github.com/gomlx/onnx-gomlx v0.5.15
 	github.com/spf13/pflag v1.0.10
