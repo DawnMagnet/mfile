@@ -8,3 +8,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # Ship every github.com/gomlx/* module in one pull request.
+      gomlx:
+        patterns:
+          - "github.com/gomlx/*"

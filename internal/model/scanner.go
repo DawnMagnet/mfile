@@ -54,6 +54,10 @@ type Scanner struct {
 	inLen    int
 	workers  int
 	maxBatch int
+
+	// warmMu and warmed make warmBatch thread-safe. See warmBatch.
+	warmMu sync.Mutex
+	warmed map[[2]int]struct{}
 }
 
 // NewScanner builds a scanner from the serialized ONNX model, its config and
@@ -90,7 +94,7 @@ func NewScanner(onnxModel, config, contentTypesKB []byte) (*Scanner, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create exec: %w", err)
 	}
-	return &Scanner{
+	s := &Scanner{
 		cfg:      cfg,
 		kb:       kb,
 		backend:  backend,
@@ -98,7 +102,17 @@ func NewScanner(onnxModel, config, contentTypesKB []byte) (*Scanner, error) {
 		inLen:    cfg.BegSize + cfg.MidSize + cfg.EndSize,
 		workers:  runtime.GOMAXPROCS(0),
 		maxBatch: defaultMaxBatch,
-	}, nil
+		warmed:   make(map[[2]int]struct{}),
+	}
+	// Power-of-two batches up to maxBatch are the only shapes ScanAll
+	// compiles. Warm them before any caller can go concurrent.
+	for n := 1; n <= s.maxBatch; n *= 2 {
+		if err := s.warmBatch(n); err != nil {
+			s.Close()
+			return nil, err
+		}
+	}
+	return s, nil
 }
 
 // SetWorkers sets the number of concurrent inference calls (at least 1).
@@ -155,6 +169,18 @@ func (s *Scanner) ScanAll(inputs []Input) ([]Result, []error) {
 	// Batches run concurrently: the backend parallelizes the big matmuls
 	// within one call, but the elementwise, slice and transpose ops between
 	// them leave most cores idle unless several calls overlap.
+	// Warm each shape first. A cold concurrent Call races in compute; see warmBatch.
+	var ready [][2]int
+	for _, b := range batches {
+		if err := s.warmBatch(b[1] - b[0]); err != nil {
+			for _, idx := range pending[b[0]:b[1]] {
+				errs[idx] = err
+			}
+			continue
+		}
+		ready = append(ready, b)
+	}
+	batches = ready
 	work := make(chan [2]int)
 	var wg sync.WaitGroup
 	for range min(s.workers, len(batches)) {
@@ -209,6 +235,41 @@ func (s *Scanner) prescan(in Input) (Result, Features, bool, error) {
 
 func (s *Scanner) ruleResult(label string) Result {
 	return Result{ContentType: s.kb[label], Score: 1, Source: SourceRule}
+}
+
+// warmBatch runs exec.Call once, serially, for a batch shape so the gomlx
+// constant cache is populated before any concurrent Call. The first
+// concurrent executions of a cold shape race in github.com/gomlx/compute
+// (introduced in v0.1.20, still present in v0.1.30): GetOrSetCachedForm
+// sets oldBuf.Flat = nil while CallRegisteredImplementation reads rhs.Flat
+// outside that lock.
+//
+//	https://github.com/gomlx/compute/blob/v0.1.28/internal/gobackend/constants.go#L141
+//	https://github.com/gomlx/compute/blob/v0.1.28/internal/gobackend/dot/registration.go#L149
+//
+// warmed is keyed by the tensor shape [batch, feature width]. warmMu covers
+// the check and the Call, so two callers cannot warm the same shape together.
+func (s *Scanner) warmBatch(batch int) error {
+	s.warmMu.Lock()
+	defer s.warmMu.Unlock()
+	key := [2]int{batch, s.inLen}
+	if _, ok := s.warmed[key]; ok {
+		return nil
+	}
+	// Zeros are in-vocabulary byte tokens. Only the shape matters: the call
+	// compiles that shape and fills the constant cache.
+	flat := make([]int32, batch*s.inLen)
+	in := tensors.FromFlatDataAndDimensions(flat, batch, s.inLen)
+	defer func() { _ = in.FinalizeAll() }()
+	out, err := s.exec.Call(in)
+	if err != nil {
+		return fmt.Errorf("warm model shape [%d %d]: %w", batch, s.inLen, err)
+	}
+	for _, t := range out {
+		_ = t.FinalizeAll()
+	}
+	s.warmed[key] = struct{}{}
+	return nil
 }
 
 // run executes the model on the given feature rows; len(rows) is the batch
