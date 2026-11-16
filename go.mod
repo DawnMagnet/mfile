@@ -6,7 +6,7 @@ require (
 	github.com/gomlx/compute v0.1.28
 	github.com/gomlx/gomlx v0.28.34
 	github.com/gomlx/onnx-gomlx v0.5.31
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.1.0
 	golang.org/x/sys v0.50.0
 )
 
